@@ -1,0 +1,99 @@
+import { SaveGmailConfigCommand } from "../../application/contracts/save-gmail-config.command";
+import { TestGmailConnectionCommand } from "../../application/contracts/test-gmail-connection.command";
+import { MailInboxPort } from "../../application/ports/mail-inbox.port";
+import { GmailService } from "../services/gmail.service";
+export declare class GmailInboxAdapter implements MailInboxPort {
+    private readonly gmailService;
+    constructor(gmailService: GmailService);
+    getConfig(): Promise<{
+        appPassword: undefined;
+        id: string;
+        baseEmail: string;
+        host: string;
+        port: number;
+        secure: boolean;
+        spamScoreLimit: number;
+        allowedDomains: string[];
+        allowedSenders: string[];
+        clientKeywords: string[];
+        incidentKeywords: string[];
+        blockedKeywords: string[];
+        lastConnectionAt: Date | null;
+        lastSyncAt: Date | null;
+        createdAt: Date;
+        updatedAt: Date;
+    } | null>;
+    saveConfig(command: SaveGmailConfigCommand): Promise<{
+        id: string;
+        baseEmail: string;
+        appPassword: string | null;
+        host: string;
+        port: number;
+        secure: boolean;
+        spamScoreLimit: number;
+        allowedDomains: string[];
+        allowedSenders: string[];
+        clientKeywords: string[];
+        incidentKeywords: string[];
+        blockedKeywords: string[];
+        lastConnectionAt: Date | null;
+        lastSyncAt: Date | null;
+        createdAt: Date;
+        updatedAt: Date;
+    }>;
+    testConnection(command: TestGmailConnectionCommand): Promise<{
+        ok: boolean;
+        message: string;
+    }>;
+    getApprovedMessages(): Promise<{
+        id: string;
+        createdAt: Date;
+        updatedAt: Date;
+        gmailMessageId: string;
+        fromName: string | null;
+        fromEmail: string;
+        subject: string | null;
+        snippet: string | null;
+        bodyText: string | null;
+        receivedAt: Date;
+        status: import(".prisma/client").$Enums.MessageStatus;
+        spamScore: number;
+        spamReason: string | null;
+        classificationReason: string | null;
+        classificationConfidence: number;
+        matchedRules: string[];
+        detectedClientName: string | null;
+        labels: string[];
+    }[]>;
+    getClassifiedMessages(): Promise<{
+        id: string;
+        createdAt: Date;
+        updatedAt: Date;
+        gmailMessageId: string;
+        fromName: string | null;
+        fromEmail: string;
+        subject: string | null;
+        snippet: string | null;
+        bodyText: string | null;
+        receivedAt: Date;
+        status: import(".prisma/client").$Enums.MessageStatus;
+        spamScore: number;
+        spamReason: string | null;
+        classificationReason: string | null;
+        classificationConfidence: number;
+        matchedRules: string[];
+        detectedClientName: string | null;
+        labels: string[];
+    }[]>;
+    getMessageSummary(): Promise<{
+        classifiedCount: number;
+        approvedCount: number;
+        dashboardLimit: number;
+    }>;
+    syncInbox(): Promise<{
+        synced: number;
+        approved: number;
+        irrelevant: number;
+        spam: number;
+    }>;
+}

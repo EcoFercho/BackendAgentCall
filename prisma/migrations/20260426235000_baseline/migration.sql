@@ -1,0 +1,2 @@
+-- Baseline for existing schema prior to shift-users module.
+-- Existing tables were already present in the database before Prisma migrations were introduced.

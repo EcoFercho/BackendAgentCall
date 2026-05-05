@@ -1,0 +1,84 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  ADMIN
+}
+
+enum MessageStatus {
+  RECEIVED
+  SPAM
+  IRRELEVANT
+  APPROVED
+}
+
+model AdminUser {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  role         UserRole @default(ADMIN)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model GmailConfig {
+  id                String   @id @default(cuid())
+  baseEmail         String   @unique
+  appPassword       String?
+  host              String   @default("imap.gmail.com")
+  port              Int      @default(993)
+  secure            Boolean  @default(true)
+  spamScoreLimit    Int      @default(45)
+  allowedDomains    String[] @default([])
+  allowedSenders    String[] @default([])
+  clientKeywords    String[] @default([])
+  incidentKeywords  String[] @default([])
+  blockedKeywords   String[] @default([])
+  lastConnectionAt  DateTime?
+  lastSyncAt        DateTime?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+}
+
+model EmailMessage {
+  id                       String        @id @default(cuid())
+  gmailMessageId           String        @unique
+  fromName                 String?
+  fromEmail                String
+  subject                  String?
+  snippet                  String?
+  bodyText                 String?
+  receivedAt               DateTime
+  status                   MessageStatus @default(RECEIVED)
+  spamScore                Int           @default(0)
+  spamReason               String?
+  classificationReason     String?
+  classificationConfidence Int           @default(0)
+  matchedRules             String[]      @default([])
+  detectedClientName       String?
+  labels                   String[]
+  createdAt                DateTime      @default(now())
+  updatedAt                DateTime      @updatedAt
+}
+
+model ShiftUser {
+  id         String   @id @default(cuid())
+  firstName  String
+  lastName   String
+  phone      String
+  shiftDate  DateTime
+  shiftStart String
+  shiftEnd   String
+  isMaster   Boolean  @default(false)
+  priority   Int      @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([shiftDate])
+}
