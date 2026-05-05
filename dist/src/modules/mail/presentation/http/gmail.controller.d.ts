@@ -1,4 +1,5 @@
 import { GetGmailConfigUseCase } from "../../application/use-cases/get-gmail-config.use-case";
+import { GenerateIncidentSummaryUseCase } from "../../application/use-cases/generate-incident-summary.use-case";
 import { GetMessageSummaryUseCase } from "../../application/use-cases/get-message-summary.use-case";
 import { ListApprovedMessagesUseCase } from "../../application/use-cases/list-approved-messages.use-case";
 import { ListClassifiedMessagesUseCase } from "../../application/use-cases/list-classified-messages.use-case";
@@ -10,17 +11,19 @@ import { TestGmailConnectionDto } from "./dto/test-gmail-connection.dto";
 export declare class GmailController {
     private readonly getGmailConfigUseCase;
     private readonly getMessageSummaryUseCase;
+    private readonly generateIncidentSummaryUseCase;
     private readonly saveGmailConfigUseCase;
     private readonly testGmailConnectionUseCase;
     private readonly listApprovedMessagesUseCase;
     private readonly listClassifiedMessagesUseCase;
     private readonly syncGmailInboxUseCase;
-    constructor(getGmailConfigUseCase: GetGmailConfigUseCase, getMessageSummaryUseCase: GetMessageSummaryUseCase, saveGmailConfigUseCase: SaveGmailConfigUseCase, testGmailConnectionUseCase: TestGmailConnectionUseCase, listApprovedMessagesUseCase: ListApprovedMessagesUseCase, listClassifiedMessagesUseCase: ListClassifiedMessagesUseCase, syncGmailInboxUseCase: SyncGmailInboxUseCase);
+    constructor(getGmailConfigUseCase: GetGmailConfigUseCase, getMessageSummaryUseCase: GetMessageSummaryUseCase, generateIncidentSummaryUseCase: GenerateIncidentSummaryUseCase, saveGmailConfigUseCase: SaveGmailConfigUseCase, testGmailConnectionUseCase: TestGmailConnectionUseCase, listApprovedMessagesUseCase: ListApprovedMessagesUseCase, listClassifiedMessagesUseCase: ListClassifiedMessagesUseCase, syncGmailInboxUseCase: SyncGmailInboxUseCase);
     getConfig(): Promise<unknown>;
     saveConfig(body: SaveGmailConfigDto): Promise<unknown>;
     testConnection(body: TestGmailConnectionDto): Promise<unknown>;
     getApprovedMessages(): Promise<unknown>;
     getClassifiedMessages(): Promise<unknown>;
     getMessageSummary(): Promise<unknown>;
+    generateIncidentSummary(id: string): Promise<unknown>;
     syncInbox(): Promise<unknown>;
 }

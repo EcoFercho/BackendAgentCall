@@ -24,7 +24,10 @@ export class NotificationsGateway {
       classificationReason: message.classificationReason,
       classificationConfidence: message.classificationConfidence,
       matchedRules: message.matchedRules,
-      detectedClientName: message.detectedClientName
+      detectedClientName: message.detectedClientName,
+      incidentSummary: message.incidentSummary,
+      incidentSummaryModel: message.incidentSummaryModel,
+      incidentSummaryGeneratedAt: message.incidentSummaryGeneratedAt
     });
   }
 }

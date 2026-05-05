@@ -34,6 +34,9 @@ let GmailInboxAdapter = class GmailInboxAdapter {
     async getMessageSummary() {
         return this.gmailService.getMessageSummary();
     }
+    async generateIncidentSummary(messageId) {
+        return this.gmailService.generateIncidentSummary(messageId);
+    }
     async syncInbox() {
         return this.gmailService.syncInbox();
     }

@@ -8,6 +8,8 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MailModule = void 0;
 const common_1 = require("@nestjs/common");
+const llm_config_module_1 = require("../llm-config/llm-config.module");
+const generate_incident_summary_use_case_1 = require("./application/use-cases/generate-incident-summary.use-case");
 const notifications_module_1 = require("../../notifications/notifications.module");
 const mail_inbox_port_1 = require("./application/ports/mail-inbox.port");
 const get_gmail_config_use_case_1 = require("./application/use-cases/get-gmail-config.use-case");
@@ -27,7 +29,7 @@ let MailModule = class MailModule {
 exports.MailModule = MailModule;
 exports.MailModule = MailModule = __decorate([
     (0, common_1.Module)({
-        imports: [notifications_module_1.NotificationsModule],
+        imports: [notifications_module_1.NotificationsModule, llm_config_module_1.LlmConfigModule],
         controllers: [gmail_controller_1.GmailController],
         providers: [
             gmail_service_1.GmailService,
@@ -36,6 +38,7 @@ exports.MailModule = MailModule = __decorate([
             gmail_inbox_adapter_1.GmailInboxAdapter,
             get_gmail_config_use_case_1.GetGmailConfigUseCase,
             get_message_summary_use_case_1.GetMessageSummaryUseCase,
+            generate_incident_summary_use_case_1.GenerateIncidentSummaryUseCase,
             save_gmail_config_use_case_1.SaveGmailConfigUseCase,
             test_gmail_connection_use_case_1.TestGmailConnectionUseCase,
             list_approved_messages_use_case_1.ListApprovedMessagesUseCase,

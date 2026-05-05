@@ -17,6 +17,7 @@ const common_1 = require("@nestjs/common");
 const swagger_1 = require("@nestjs/swagger");
 const jwt_auth_guard_1 = require("../../../../common/guards/jwt-auth.guard");
 const get_gmail_config_use_case_1 = require("../../application/use-cases/get-gmail-config.use-case");
+const generate_incident_summary_use_case_1 = require("../../application/use-cases/generate-incident-summary.use-case");
 const get_message_summary_use_case_1 = require("../../application/use-cases/get-message-summary.use-case");
 const list_approved_messages_use_case_1 = require("../../application/use-cases/list-approved-messages.use-case");
 const list_classified_messages_use_case_1 = require("../../application/use-cases/list-classified-messages.use-case");
@@ -26,9 +27,10 @@ const test_gmail_connection_use_case_1 = require("../../application/use-cases/te
 const save_gmail_config_dto_1 = require("./dto/save-gmail-config.dto");
 const test_gmail_connection_dto_1 = require("./dto/test-gmail-connection.dto");
 let GmailController = class GmailController {
-    constructor(getGmailConfigUseCase, getMessageSummaryUseCase, saveGmailConfigUseCase, testGmailConnectionUseCase, listApprovedMessagesUseCase, listClassifiedMessagesUseCase, syncGmailInboxUseCase) {
+    constructor(getGmailConfigUseCase, getMessageSummaryUseCase, generateIncidentSummaryUseCase, saveGmailConfigUseCase, testGmailConnectionUseCase, listApprovedMessagesUseCase, listClassifiedMessagesUseCase, syncGmailInboxUseCase) {
         this.getGmailConfigUseCase = getGmailConfigUseCase;
         this.getMessageSummaryUseCase = getMessageSummaryUseCase;
+        this.generateIncidentSummaryUseCase = generateIncidentSummaryUseCase;
         this.saveGmailConfigUseCase = saveGmailConfigUseCase;
         this.testGmailConnectionUseCase = testGmailConnectionUseCase;
         this.listApprovedMessagesUseCase = listApprovedMessagesUseCase;
@@ -52,6 +54,9 @@ let GmailController = class GmailController {
     }
     getMessageSummary() {
         return this.getMessageSummaryUseCase.execute();
+    }
+    generateIncidentSummary(id) {
+        return this.generateIncidentSummaryUseCase.execute(id);
     }
     syncInbox() {
         return this.syncGmailInboxUseCase.execute();
@@ -103,6 +108,14 @@ __decorate([
     __metadata("design:returntype", void 0)
 ], GmailController.prototype, "getMessageSummary", null);
 __decorate([
+    (0, swagger_1.ApiOperation)({ summary: "Generar y guardar el incidente para un correo relevante" }),
+    (0, common_1.Post)("messages/:id/incident"),
+    __param(0, (0, common_1.Param)("id")),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String]),
+    __metadata("design:returntype", void 0)
+], GmailController.prototype, "generateIncidentSummary", null);
+__decorate([
     (0, swagger_1.ApiOperation)({ summary: "Sincronizar la bandeja y procesar mensajes" }),
     (0, common_1.Post)("sync"),
     __metadata("design:type", Function),
@@ -116,6 +129,7 @@ exports.GmailController = GmailController = __decorate([
     (0, common_1.Controller)("gmail"),
     __metadata("design:paramtypes", [get_gmail_config_use_case_1.GetGmailConfigUseCase,
         get_message_summary_use_case_1.GetMessageSummaryUseCase,
+        generate_incident_summary_use_case_1.GenerateIncidentSummaryUseCase,
         save_gmail_config_use_case_1.SaveGmailConfigUseCase,
         test_gmail_connection_use_case_1.TestGmailConnectionUseCase,
         list_approved_messages_use_case_1.ListApprovedMessagesUseCase,

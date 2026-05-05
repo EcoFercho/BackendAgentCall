@@ -8,8 +8,6 @@ export declare class GmailInboxAdapter implements MailInboxPort {
     getConfig(): Promise<{
         appPassword: undefined;
         id: string;
-        createdAt: Date;
-        updatedAt: Date;
         baseEmail: string;
         host: string;
         port: number;
@@ -22,11 +20,11 @@ export declare class GmailInboxAdapter implements MailInboxPort {
         blockedKeywords: string[];
         lastConnectionAt: Date | null;
         lastSyncAt: Date | null;
+        createdAt: Date;
+        updatedAt: Date;
     } | null>;
     saveConfig(command: SaveGmailConfigCommand): Promise<{
         id: string;
-        createdAt: Date;
-        updatedAt: Date;
         baseEmail: string;
         appPassword: string | null;
         host: string;
@@ -40,6 +38,8 @@ export declare class GmailInboxAdapter implements MailInboxPort {
         blockedKeywords: string[];
         lastConnectionAt: Date | null;
         lastSyncAt: Date | null;
+        createdAt: Date;
+        updatedAt: Date;
     }>;
     testConnection(command: TestGmailConnectionCommand): Promise<{
         ok: boolean;
@@ -63,6 +63,9 @@ export declare class GmailInboxAdapter implements MailInboxPort {
         classificationConfidence: number;
         matchedRules: string[];
         detectedClientName: string | null;
+        incidentSummary: string | null;
+        incidentSummaryModel: string | null;
+        incidentSummaryGeneratedAt: Date | null;
         labels: string[];
     }[]>;
     getClassifiedMessages(): Promise<{
@@ -83,12 +86,38 @@ export declare class GmailInboxAdapter implements MailInboxPort {
         classificationConfidence: number;
         matchedRules: string[];
         detectedClientName: string | null;
+        incidentSummary: string | null;
+        incidentSummaryModel: string | null;
+        incidentSummaryGeneratedAt: Date | null;
         labels: string[];
     }[]>;
     getMessageSummary(): Promise<{
         classifiedCount: number;
         approvedCount: number;
         dashboardLimit: number;
+    }>;
+    generateIncidentSummary(messageId: string): Promise<{
+        id: string;
+        createdAt: Date;
+        updatedAt: Date;
+        gmailMessageId: string;
+        fromName: string | null;
+        fromEmail: string;
+        subject: string | null;
+        snippet: string | null;
+        bodyText: string | null;
+        receivedAt: Date;
+        status: import(".prisma/client").$Enums.MessageStatus;
+        spamScore: number;
+        spamReason: string | null;
+        classificationReason: string | null;
+        classificationConfidence: number;
+        matchedRules: string[];
+        detectedClientName: string | null;
+        incidentSummary: string | null;
+        incidentSummaryModel: string | null;
+        incidentSummaryGeneratedAt: Date | null;
+        labels: string[];
     }>;
     syncInbox(): Promise<{
         synced: number;

@@ -8,5 +8,6 @@ export interface MailInboxPort {
     getApprovedMessages(): Promise<unknown>;
     getClassifiedMessages(): Promise<unknown>;
     getMessageSummary(): Promise<unknown>;
+    generateIncidentSummary(messageId: string): Promise<unknown>;
     syncInbox(): Promise<unknown>;
 }

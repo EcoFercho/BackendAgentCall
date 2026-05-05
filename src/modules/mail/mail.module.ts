@@ -1,4 +1,6 @@
 import { Module } from "@nestjs/common";
+import { LlmConfigModule } from "../llm-config/llm-config.module";
+import { GenerateIncidentSummaryUseCase } from "./application/use-cases/generate-incident-summary.use-case";
 import { NotificationsModule } from "../../notifications/notifications.module";
 import { MAIL_INBOX_PORT } from "./application/ports/mail-inbox.port";
 import { GetGmailConfigUseCase } from "./application/use-cases/get-gmail-config.use-case";
@@ -15,7 +17,7 @@ import { GmailService } from "./infrastructure/services/gmail.service";
 import { GmailController } from "./presentation/http/gmail.controller";
 
 @Module({
-  imports: [NotificationsModule],
+  imports: [NotificationsModule, LlmConfigModule],
   controllers: [GmailController],
   providers: [
     GmailService,
@@ -24,6 +26,7 @@ import { GmailController } from "./presentation/http/gmail.controller";
     GmailInboxAdapter,
     GetGmailConfigUseCase,
     GetMessageSummaryUseCase,
+    GenerateIncidentSummaryUseCase,
     SaveGmailConfigUseCase,
     TestGmailConnectionUseCase,
     ListApprovedMessagesUseCase,

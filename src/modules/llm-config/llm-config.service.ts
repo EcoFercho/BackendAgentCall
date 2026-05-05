@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable } from "@nestjs/common";
-import { LlmProviderType } from "@prisma/client";
+import { LlmConfig as PersistedLlmConfig, LlmProviderType } from "@prisma/client";
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 import { PrismaService } from "../../prisma/prisma.service";
 import { ListLlmModelsDto } from "./presentation/http/dto/list-llm-models.dto";
@@ -156,6 +156,82 @@ export class LlmConfigService {
     }
   }
 
+  async generateIncidentSummary(userText: string) {
+    const config = await this.prisma.llmConfig.findUnique({
+      where: { configKey: DEFAULT_CONFIG_KEY }
+    });
+    const defaults = this.getDefaultConfig();
+    const sourceText = this.normalizeIncidentSourceText(userText);
+
+    if (!sourceText) {
+      throw new BadRequestException("No hay contenido suficiente para generar el incidente.");
+    }
+
+    const prompt = this.buildIncidentPrompt(
+      config?.referenceMarkdown ?? defaults.referenceMarkdown,
+      sourceText
+    );
+    const activeProvider = config?.activeProvider ?? defaults.activeProvider;
+
+    if (activeProvider === LlmProviderType.LOCAL) {
+      const model = config?.localModel ?? defaults.localModel;
+      const summary = await this.generateWithLocalProvider(
+        {
+          baseUrl: config?.localBaseUrl ?? defaults.localBaseUrl,
+          generatePath: config?.localGeneratePath ?? defaults.localGeneratePath,
+          model,
+          timeoutMs: config?.localTimeoutMs ?? defaults.localTimeoutMs
+        },
+        prompt
+      );
+
+      return {
+        summary,
+        provider: activeProvider,
+        providerName: "LOCAL",
+        model
+      };
+    }
+
+    const providerName = this.normalizeRemoteProvider(config?.apiProviderName);
+    if (!providerName) {
+      throw new BadRequestException("No hay un proveedor API remoto configurado.");
+    }
+
+    const apiKey = this.tryDecryptSecret(config?.apiKey ?? null);
+    if (!apiKey) {
+      throw new BadRequestException("No hay una API key remota configurada para generar el incidente.");
+    }
+
+    const model = config?.apiModel?.trim();
+    if (!model) {
+      throw new BadRequestException("No hay un modelo remoto configurado para generar el incidente.");
+    }
+
+    const apiPreset = REMOTE_PROVIDER_PRESETS[providerName];
+    const baseUrl = config?.apiBaseUrl ?? apiPreset.baseUrl;
+    const generatePath = config?.apiGeneratePath ?? apiPreset.generatePath;
+    const timeoutMs = config?.apiTimeoutMs ?? defaults.apiTimeoutMs;
+    const summary = await this.generateWithRemoteProvider(
+      providerName,
+      {
+        baseUrl,
+        generatePath,
+        model,
+        apiKey,
+        timeoutMs
+      },
+      prompt
+    );
+
+    return {
+      summary,
+      provider: activeProvider,
+      providerName,
+      model
+    };
+  }
+
   getDefaultConfig() {
     return {
       activeProvider: LlmProviderType.LOCAL,
@@ -173,26 +249,7 @@ export class LlmConfigService {
     };
   }
 
-  private mapConfig(
-    config:
-      | {
-          id: string;
-          activeProvider: LlmProviderType;
-          localBaseUrl: string;
-          localGeneratePath: string;
-          localModel: string;
-          localTimeoutMs: number;
-          apiProviderName: string | null;
-          apiBaseUrl: string | null;
-          apiGeneratePath: string | null;
-          apiModel: string | null;
-          apiKey: string | null;
-          apiTimeoutMs: number;
-          referenceMarkdown: string;
-          updatedAt: Date;
-        }
-      | null
-  ) {
+  private mapConfig(config: PersistedLlmConfig | null) {
     if (!config) {
       return this.getDefaultConfig();
     }
@@ -274,6 +331,222 @@ export class LlmConfigService {
       : null;
   }
 
+  private async generateWithLocalProvider(
+    options: {
+      baseUrl: string;
+      generatePath: string;
+      model: string;
+      timeoutMs: number;
+    },
+    prompt: string
+  ) {
+    const data = await this.fetchJson<{
+      response?: string;
+      message?: { content?: string };
+    }>("LOCAL", this.buildGenerateUrl(options.baseUrl, options.generatePath), {
+      method: "POST",
+      timeoutMs: options.timeoutMs,
+      body: {
+        model: options.model,
+        prompt,
+        stream: false
+      }
+    });
+
+    const text = this.normalizeGeneratedText(data.response ?? data.message?.content ?? "");
+    if (!text) {
+      throw new BadRequestException("El runtime local no devolvio un resumen de incidente.");
+    }
+
+    return text;
+  }
+
+  private async generateWithRemoteProvider(
+    providerName: RemoteLlmProvider,
+    options: {
+      baseUrl: string;
+      generatePath: string;
+      model: string;
+      apiKey: string;
+      timeoutMs: number;
+    },
+    prompt: string
+  ) {
+    switch (providerName) {
+      case "OPENAI":
+        return this.generateWithOpenAi(options, prompt);
+      case "ANTHROPIC":
+        return this.generateWithAnthropic(options, prompt);
+      case "GOOGLE":
+        return this.generateWithGoogle(options, prompt);
+    }
+  }
+
+  private async generateWithOpenAi(
+    options: {
+      baseUrl: string;
+      generatePath: string;
+      model: string;
+      apiKey: string;
+      timeoutMs: number;
+    },
+    prompt: string
+  ) {
+    const data = await this.fetchJson<{
+      output_text?: string;
+      output?: Array<{
+        content?: Array<{ type?: string; text?: string }>;
+      }>;
+    }>("OPENAI", this.buildGenerateUrl(options.baseUrl, options.generatePath), {
+      method: "POST",
+      timeoutMs: options.timeoutMs,
+      headers: {
+        Authorization: `Bearer ${options.apiKey}`
+      },
+      body: {
+        model: options.model,
+        input: prompt
+      }
+    });
+
+    const nestedOutput =
+      data.output
+        ?.flatMap((item) => item.content ?? [])
+        .filter((item) => item.type === "output_text" || item.type === "text")
+        .map((item) => item.text?.trim() ?? "")
+        .filter(Boolean)
+        .join("\n\n") ?? "";
+    const text = this.normalizeGeneratedText(data.output_text ?? nestedOutput);
+
+    if (!text) {
+      throw new BadRequestException("OpenAI no devolvio un resumen de incidente.");
+    }
+
+    return text;
+  }
+
+  private async generateWithAnthropic(
+    options: {
+      baseUrl: string;
+      generatePath: string;
+      model: string;
+      apiKey: string;
+      timeoutMs: number;
+    },
+    prompt: string
+  ) {
+    const data = await this.fetchJson<{
+      content?: Array<{ type?: string; text?: string }>;
+    }>("ANTHROPIC", this.buildGenerateUrl(options.baseUrl, options.generatePath), {
+      method: "POST",
+      timeoutMs: options.timeoutMs,
+      headers: {
+        "anthropic-version": "2023-06-01",
+        "x-api-key": options.apiKey
+      },
+      body: {
+        model: options.model,
+        max_tokens: 700,
+        messages: [
+          {
+            role: "user",
+            content: prompt
+          }
+        ]
+      }
+    });
+
+    const text = this.normalizeGeneratedText(
+      data.content
+        ?.filter((item) => item.type === "text")
+        .map((item) => item.text?.trim() ?? "")
+        .filter(Boolean)
+        .join("\n\n") ?? ""
+    );
+
+    if (!text) {
+      throw new BadRequestException("Anthropic no devolvio un resumen de incidente.");
+    }
+
+    return text;
+  }
+
+  private async generateWithGoogle(
+    options: {
+      baseUrl: string;
+      generatePath: string;
+      model: string;
+      apiKey: string;
+      timeoutMs: number;
+    },
+    prompt: string
+  ) {
+    const url = new URL(this.buildGenerateUrl(options.baseUrl, options.generatePath, options.model));
+    url.searchParams.set("key", options.apiKey);
+
+    const data = await this.fetchJson<{
+      candidates?: Array<{
+        content?: {
+          parts?: Array<{ text?: string }>;
+        };
+      }>;
+    }>("GOOGLE", url.toString(), {
+      method: "POST",
+      timeoutMs: options.timeoutMs,
+      body: {
+        contents: [
+          {
+            role: "user",
+            parts: [{ text: prompt }]
+          }
+        ]
+      }
+    });
+
+    const text = this.normalizeGeneratedText(
+      data.candidates?.[0]?.content?.parts
+        ?.map((part) => part.text?.trim() ?? "")
+        .filter(Boolean)
+        .join("\n\n") ?? ""
+    );
+
+    if (!text) {
+      throw new BadRequestException("Google no devolvio un resumen de incidente.");
+    }
+
+    return text;
+  }
+
+  private buildGenerateUrl(baseUrl: string, generatePath: string, model?: string) {
+    const normalizedBaseUrl = this.normalizeUrlLike(baseUrl);
+    const normalizedPath = this.normalizePath(generatePath);
+    const resolvedPath = model ? normalizedPath.replace("{model}", encodeURIComponent(model)) : normalizedPath;
+    return `${normalizedBaseUrl}${resolvedPath}`;
+  }
+
+  private buildIncidentPrompt(referenceMarkdown: string, userText: string) {
+    const template = (referenceMarkdown || DEFAULT_LLM_REFERENCE_MARKDOWN).trim();
+
+    if (!template.includes("$json.userText")) {
+      return `${template}\n\nTexto del usuario:\n${userText}\n\nRespuesta:`;
+    }
+
+    const [rawPrefix, ...restParts] = template.split("$json.userText");
+    const rawSuffix = restParts.join("$json.userText");
+    const prefix = rawPrefix.replace(/^\s*\{\{\s*'/, "").replace(/'\s*\+\s*$/, "");
+    const suffix = rawSuffix.replace(/^\s*\+\s*'/, "").replace(/'\s*\}\}\s*$/, "");
+
+    return `${prefix}${userText}${suffix}`.replace(/\r\n?/g, "\n").trim();
+  }
+
+  private normalizeIncidentSourceText(value: string) {
+    return value.replace(/\r\n?/g, "\n").replace(/\u0000/g, "").trim();
+  }
+
+  private normalizeGeneratedText(value: string) {
+    return value.replace(/\r\n?/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+  }
+
   private async fetchOpenAiModels(apiKey: string) {
     const data = await this.fetchProviderJson<{
       data?: Array<{ id?: string }>;
@@ -342,13 +615,34 @@ export class LlmConfigService {
       headers?: Record<string, string>;
     }
   ) {
+    return this.fetchJson<T>(providerName, url, {
+      method: "GET",
+      headers: options?.headers,
+      timeoutMs: 15000
+    });
+  }
+
+  private async fetchJson<T>(
+    providerName: string,
+    url: string,
+    options: {
+      method: "GET" | "POST";
+      headers?: Record<string, string>;
+      body?: unknown;
+      timeoutMs: number;
+    }
+  ) {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 15000);
+    const timeoutId = setTimeout(() => controller.abort(), options.timeoutMs);
 
     try {
       const response = await fetch(url, {
-        method: "GET",
-        headers: options?.headers,
+        method: options.method,
+        headers: {
+          ...(options.body === undefined ? {} : { "content-type": "application/json" }),
+          ...(options.headers ?? {})
+        },
+        body: options.body === undefined ? undefined : JSON.stringify(options.body),
         signal: controller.signal
       });
 
@@ -366,16 +660,16 @@ export class LlmConfigService {
       }
 
       if (error instanceof Error && error.name === "AbortError") {
-        throw new BadRequestException(`La consulta de modelos para ${providerName} excedio el tiempo limite.`);
+        throw new BadRequestException(`La solicitud a ${providerName} excedio el tiempo limite.`);
       }
 
-      throw new BadRequestException(`No se pudieron obtener modelos desde ${providerName}.`);
+      throw new BadRequestException(`No se pudo completar la solicitud a ${providerName}.`);
     } finally {
       clearTimeout(timeoutId);
     }
   }
 
-  private buildProviderErrorMessage(providerName: RemoteLlmProvider, status: number, errorBody: string) {
+  private buildProviderErrorMessage(providerName: string, status: number, errorBody: string) {
     const message = this.tryReadProviderError(errorBody);
     return message
       ? `${providerName} respondio ${status}: ${message}`

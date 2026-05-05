@@ -4,6 +4,7 @@ import { LlmConfigService } from "./llm-config.service";
 
 @Module({
   controllers: [LlmConfigController],
-  providers: [LlmConfigService]
+  providers: [LlmConfigService],
+  exports: [LlmConfigService]
 })
 export class LlmConfigModule {}

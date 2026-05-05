@@ -1,6 +1,7 @@
 import { OnModuleDestroy, OnModuleInit } from "@nestjs/common";
 import { NotificationsGateway } from "../../../../notifications/notifications.gateway";
 import { PrismaService } from "../../../../prisma/prisma.service";
+import { LlmConfigService } from "../../../llm-config/llm-config.service";
 import { SaveGmailConfigCommand } from "../../application/contracts/save-gmail-config.command";
 import { TestGmailConnectionCommand } from "../../application/contracts/test-gmail-connection.command";
 import { EmailClassificationService } from "../../domain/services/email-classification.service";
@@ -16,15 +17,14 @@ export declare class GmailService implements OnModuleInit, OnModuleDestroy {
     private readonly spamFilterService;
     private readonly emailClassificationService;
     private readonly notificationsGateway;
+    private readonly llmConfigService;
     private readonly logger;
     private activeSyncPromise;
     private backgroundSyncTimer;
-    constructor(prisma: PrismaService, spamFilterService: SpamFilterService, emailClassificationService: EmailClassificationService, notificationsGateway: NotificationsGateway);
+    constructor(prisma: PrismaService, spamFilterService: SpamFilterService, emailClassificationService: EmailClassificationService, notificationsGateway: NotificationsGateway, llmConfigService: LlmConfigService);
     getConfig(): Promise<{
         appPassword: undefined;
         id: string;
-        createdAt: Date;
-        updatedAt: Date;
         baseEmail: string;
         host: string;
         port: number;
@@ -37,11 +37,11 @@ export declare class GmailService implements OnModuleInit, OnModuleDestroy {
         blockedKeywords: string[];
         lastConnectionAt: Date | null;
         lastSyncAt: Date | null;
+        createdAt: Date;
+        updatedAt: Date;
     } | null>;
     saveConfig(command: SaveGmailConfigCommand): Promise<{
         id: string;
-        createdAt: Date;
-        updatedAt: Date;
         baseEmail: string;
         appPassword: string | null;
         host: string;
@@ -55,6 +55,8 @@ export declare class GmailService implements OnModuleInit, OnModuleDestroy {
         blockedKeywords: string[];
         lastConnectionAt: Date | null;
         lastSyncAt: Date | null;
+        createdAt: Date;
+        updatedAt: Date;
     }>;
     testConnection(command: TestGmailConnectionCommand): Promise<{
         ok: boolean;
@@ -78,6 +80,9 @@ export declare class GmailService implements OnModuleInit, OnModuleDestroy {
         classificationConfidence: number;
         matchedRules: string[];
         detectedClientName: string | null;
+        incidentSummary: string | null;
+        incidentSummaryModel: string | null;
+        incidentSummaryGeneratedAt: Date | null;
         labels: string[];
     }[]>;
     getClassifiedMessages(): Promise<{
@@ -98,12 +103,38 @@ export declare class GmailService implements OnModuleInit, OnModuleDestroy {
         classificationConfidence: number;
         matchedRules: string[];
         detectedClientName: string | null;
+        incidentSummary: string | null;
+        incidentSummaryModel: string | null;
+        incidentSummaryGeneratedAt: Date | null;
         labels: string[];
     }[]>;
     getMessageSummary(): Promise<{
         classifiedCount: number;
         approvedCount: number;
         dashboardLimit: number;
+    }>;
+    generateIncidentSummary(messageId: string): Promise<{
+        id: string;
+        createdAt: Date;
+        updatedAt: Date;
+        gmailMessageId: string;
+        fromName: string | null;
+        fromEmail: string;
+        subject: string | null;
+        snippet: string | null;
+        bodyText: string | null;
+        receivedAt: Date;
+        status: import(".prisma/client").$Enums.MessageStatus;
+        spamScore: number;
+        spamReason: string | null;
+        classificationReason: string | null;
+        classificationConfidence: number;
+        matchedRules: string[];
+        detectedClientName: string | null;
+        incidentSummary: string | null;
+        incidentSummaryModel: string | null;
+        incidentSummaryGeneratedAt: Date | null;
+        labels: string[];
     }>;
     syncInbox(): Promise<SyncInboxResult>;
     onModuleInit(): void;
@@ -122,6 +153,8 @@ export declare class GmailService implements OnModuleInit, OnModuleDestroy {
     private htmlToPlainText;
     private normalizeMessageText;
     private createSnippet;
+    private buildIncidentSource;
+    private ensureIncidentSummary;
     private openMailboxForFetch;
     private withTimeout;
     private normalizeRuleConfig;

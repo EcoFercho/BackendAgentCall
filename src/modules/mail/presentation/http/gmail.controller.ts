@@ -1,7 +1,8 @@
-import { Body, Controller, Get, Post, UseGuards } from "@nestjs/common";
+import { Body, Controller, Get, Param, Post, UseGuards } from "@nestjs/common";
 import { ApiBearerAuth, ApiOperation, ApiTags } from "@nestjs/swagger";
 import { JwtAuthGuard } from "../../../../common/guards/jwt-auth.guard";
 import { GetGmailConfigUseCase } from "../../application/use-cases/get-gmail-config.use-case";
+import { GenerateIncidentSummaryUseCase } from "../../application/use-cases/generate-incident-summary.use-case";
 import { GetMessageSummaryUseCase } from "../../application/use-cases/get-message-summary.use-case";
 import { ListApprovedMessagesUseCase } from "../../application/use-cases/list-approved-messages.use-case";
 import { ListClassifiedMessagesUseCase } from "../../application/use-cases/list-classified-messages.use-case";
@@ -19,6 +20,7 @@ export class GmailController {
   constructor(
     private readonly getGmailConfigUseCase: GetGmailConfigUseCase,
     private readonly getMessageSummaryUseCase: GetMessageSummaryUseCase,
+    private readonly generateIncidentSummaryUseCase: GenerateIncidentSummaryUseCase,
     private readonly saveGmailConfigUseCase: SaveGmailConfigUseCase,
     private readonly testGmailConnectionUseCase: TestGmailConnectionUseCase,
     private readonly listApprovedMessagesUseCase: ListApprovedMessagesUseCase,
@@ -60,6 +62,12 @@ export class GmailController {
   @Get("messages/summary")
   getMessageSummary() {
     return this.getMessageSummaryUseCase.execute();
+  }
+
+  @ApiOperation({ summary: "Generar y guardar el incidente para un correo relevante" })
+  @Post("messages/:id/incident")
+  generateIncidentSummary(@Param("id") id: string) {
+    return this.generateIncidentSummaryUseCase.execute(id);
   }
 
   @ApiOperation({ summary: "Sincronizar la bandeja y procesar mensajes" })

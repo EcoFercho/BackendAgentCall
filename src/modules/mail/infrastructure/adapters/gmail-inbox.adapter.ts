@@ -32,6 +32,10 @@ export class GmailInboxAdapter implements MailInboxPort {
     return this.gmailService.getMessageSummary();
   }
 
+  async generateIncidentSummary(messageId: string) {
+    return this.gmailService.generateIncidentSummary(messageId);
+  }
+
   async syncInbox() {
     return this.gmailService.syncInbox();
   }

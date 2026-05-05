@@ -67,6 +67,9 @@ model EmailMessage {
   classificationConfidence Int           @default(0)
   matchedRules             String[]      @default([])
   detectedClientName       String?
+  incidentSummary          String?
+  incidentSummaryModel     String?
+  incidentSummaryGeneratedAt DateTime?
   labels                   String[]
   createdAt                DateTime      @default(now())
   updatedAt                DateTime      @updatedAt

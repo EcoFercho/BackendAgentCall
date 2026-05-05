@@ -1,10 +1,11 @@
-import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
-import { GmailConfig, MessageStatus, Prisma } from "@prisma/client";
+import { BadRequestException, Injectable, Logger, NotFoundException, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
+import { EmailMessage, GmailConfig, MessageStatus, Prisma } from "@prisma/client";
 import { ImapFlow } from "imapflow";
 import { simpleParser } from "mailparser";
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 import { NotificationsGateway } from "../../../../notifications/notifications.gateway";
 import { PrismaService } from "../../../../prisma/prisma.service";
+import { LlmConfigService } from "../../../llm-config/llm-config.service";
 import { SaveGmailConfigCommand } from "../../application/contracts/save-gmail-config.command";
 import { TestGmailConnectionCommand } from "../../application/contracts/test-gmail-connection.command";
 import { EmailClassificationService } from "../../domain/services/email-classification.service";
@@ -38,7 +39,8 @@ export class GmailService implements OnModuleInit, OnModuleDestroy {
     private readonly prisma: PrismaService,
     private readonly spamFilterService: SpamFilterService,
     private readonly emailClassificationService: EmailClassificationService,
-    private readonly notificationsGateway: NotificationsGateway
+    private readonly notificationsGateway: NotificationsGateway,
+    private readonly llmConfigService: LlmConfigService
   ) {}
 
   async getConfig() {
@@ -152,6 +154,22 @@ export class GmailService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
+  async generateIncidentSummary(messageId: string) {
+    const message = await this.prisma.emailMessage.findUnique({
+      where: { id: messageId }
+    });
+
+    if (!message) {
+      throw new NotFoundException("No se encontro el correo solicitado.");
+    }
+
+    if (message.status !== MessageStatus.APPROVED) {
+      throw new BadRequestException("Solo se puede generar incidente para correos relevantes.");
+    }
+
+    return this.ensureIncidentSummary(message);
+  }
+
   async syncInbox() {
     if (this.activeSyncPromise) {
       return this.activeSyncPromise;
@@ -238,7 +256,8 @@ export class GmailService implements OnModuleInit, OnModuleDestroy {
             });
 
             if (saved.status === MessageStatus.APPROVED) {
-              this.notificationsGateway.broadcastTicker(saved);
+              const messageWithIncident = await this.ensureIncidentSummary(saved, { silent: true });
+              this.notificationsGateway.broadcastTicker(messageWithIncident);
             }
           }
 
@@ -505,6 +524,63 @@ export class GmailService implements OnModuleInit, OnModuleDestroy {
     }
 
     return compact.length > 280 ? `${compact.slice(0, 280).trim()}...` : compact;
+  }
+
+  private buildIncidentSource(
+    message: Pick<
+      Prisma.EmailMessageUncheckedCreateInput,
+      "fromName" | "fromEmail" | "subject" | "receivedAt" | "bodyText" | "snippet" | "detectedClientName" | "classificationReason"
+    >
+  ) {
+    const sections = [
+      `Asunto: ${message.subject || "(sin asunto)"}`,
+      `Remitente: ${message.fromName ? `${message.fromName} <${message.fromEmail}>` : message.fromEmail}`,
+      `Recibido: ${new Date(message.receivedAt).toISOString()}`
+    ];
+
+    if (message.detectedClientName) {
+      sections.push(`Cliente detectado: ${message.detectedClientName}`);
+    }
+
+    if (message.classificationReason) {
+      sections.push(`Contexto de clasificacion: ${message.classificationReason}`);
+    }
+
+    sections.push(
+      "Correo completo:",
+      message.bodyText?.trim() || message.snippet?.trim() || "Sin contenido disponible."
+    );
+
+    return sections.join("\n");
+  }
+
+  private async ensureIncidentSummary(message: EmailMessage, options?: { silent?: boolean }) {
+    if (message.incidentSummary?.trim()) {
+      return message;
+    }
+
+    const sourceText = this.buildIncidentSource(message);
+
+    try {
+      const generated = await this.llmConfigService.generateIncidentSummary(sourceText);
+
+      return this.prisma.emailMessage.update({
+        where: { id: message.id },
+        data: {
+          incidentSummary: generated.summary,
+          incidentSummaryModel: generated.model,
+          incidentSummaryGeneratedAt: new Date()
+        }
+      });
+    } catch (error) {
+      if (!options?.silent) {
+        throw error;
+      }
+
+      const messageText = error instanceof Error ? error.message : "No se pudo generar incidente";
+      this.logger.warn(`No se pudo generar incidente para ${message.gmailMessageId}: ${messageText}`);
+      return message;
+    }
   }
 
   private async openMailboxForFetch(client: ImapFlow, path: string) {
