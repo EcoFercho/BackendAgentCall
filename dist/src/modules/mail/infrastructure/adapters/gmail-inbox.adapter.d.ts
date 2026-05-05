@@ -8,6 +8,8 @@ export declare class GmailInboxAdapter implements MailInboxPort {
     getConfig(): Promise<{
         appPassword: undefined;
         id: string;
+        createdAt: Date;
+        updatedAt: Date;
         baseEmail: string;
         host: string;
         port: number;
@@ -20,11 +22,11 @@ export declare class GmailInboxAdapter implements MailInboxPort {
         blockedKeywords: string[];
         lastConnectionAt: Date | null;
         lastSyncAt: Date | null;
-        createdAt: Date;
-        updatedAt: Date;
     } | null>;
     saveConfig(command: SaveGmailConfigCommand): Promise<{
         id: string;
+        createdAt: Date;
+        updatedAt: Date;
         baseEmail: string;
         appPassword: string | null;
         host: string;
@@ -38,8 +40,6 @@ export declare class GmailInboxAdapter implements MailInboxPort {
         blockedKeywords: string[];
         lastConnectionAt: Date | null;
         lastSyncAt: Date | null;
-        createdAt: Date;
-        updatedAt: Date;
     }>;
     testConnection(command: TestGmailConnectionCommand): Promise<{
         ok: boolean;

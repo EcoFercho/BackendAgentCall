@@ -3,6 +3,7 @@ import { ConfigModule } from "@nestjs/config";
 import { NotificationsModule } from "./notifications/notifications.module";
 import { PrismaModule } from "./prisma/prisma.module";
 import { AuthModule } from "./modules/auth/auth.module";
+import { LlmConfigModule } from "./modules/llm-config/llm-config.module";
 import { MailModule } from "./modules/mail/mail.module";
 import { ShiftUsersModule } from "./modules/shift-users/shift-users.module";
 
@@ -12,6 +13,7 @@ import { ShiftUsersModule } from "./modules/shift-users/shift-users.module";
     PrismaModule,
     AuthModule,
     NotificationsModule,
+    LlmConfigModule,
     MailModule,
     ShiftUsersModule
   ]

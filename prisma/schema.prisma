@@ -18,6 +18,11 @@ enum MessageStatus {
   APPROVED
 }
 
+enum LlmProviderType {
+  LOCAL
+  API
+}
+
 model AdminUser {
   id           String   @id @default(cuid())
   email        String   @unique
@@ -65,6 +70,25 @@ model EmailMessage {
   labels                   String[]
   createdAt                DateTime      @default(now())
   updatedAt                DateTime      @updatedAt
+}
+
+model LlmConfig {
+  id               String          @id @default(cuid())
+  configKey        String          @unique @default("default")
+  activeProvider   LlmProviderType @default(LOCAL)
+  localBaseUrl     String          @default("http://127.0.0.1:11434")
+  localGeneratePath String         @default("/api/generate")
+  localModel       String          @default("gemma4:26b")
+  localTimeoutMs   Int             @default(30000)
+  apiProviderName  String?
+  apiBaseUrl       String?
+  apiGeneratePath  String?
+  apiModel         String?
+  apiKey           String?
+  apiTimeoutMs     Int             @default(30000)
+  referenceMarkdown String
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
 }
 
 model ShiftUser {

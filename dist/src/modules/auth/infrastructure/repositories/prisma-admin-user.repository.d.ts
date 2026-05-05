@@ -9,7 +9,7 @@ export declare class PrismaAdminUserRepository implements AdminUserRepository {
         updatedAt: Date;
         email: string;
         passwordHash: string;
-        role: import("@prisma/client").$Enums.UserRole;
+        role: import(".prisma/client").$Enums.UserRole;
     } | null>;
     findViewById(id: string): Promise<AdminUserView | null>;
 }

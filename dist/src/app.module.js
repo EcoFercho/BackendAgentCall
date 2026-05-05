@@ -12,6 +12,7 @@ const config_1 = require("@nestjs/config");
 const notifications_module_1 = require("./notifications/notifications.module");
 const prisma_module_1 = require("./prisma/prisma.module");
 const auth_module_1 = require("./modules/auth/auth.module");
+const llm_config_module_1 = require("./modules/llm-config/llm-config.module");
 const mail_module_1 = require("./modules/mail/mail.module");
 const shift_users_module_1 = require("./modules/shift-users/shift-users.module");
 let AppModule = class AppModule {
@@ -24,6 +25,7 @@ exports.AppModule = AppModule = __decorate([
             prisma_module_1.PrismaModule,
             auth_module_1.AuthModule,
             notifications_module_1.NotificationsModule,
+            llm_config_module_1.LlmConfigModule,
             mail_module_1.MailModule,
             shift_users_module_1.ShiftUsersModule
         ]
