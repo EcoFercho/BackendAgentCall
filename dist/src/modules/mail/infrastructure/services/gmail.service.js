@@ -23,8 +23,8 @@ const email_classification_service_1 = require("../../domain/services/email-clas
 const spam_filter_service_1 = require("../../domain/services/spam-filter.service");
 const DASHBOARD_MESSAGES_LIMIT = 200;
 const MAILBOX_RECENT_WINDOW_SIZE = 20;
-const BACKGROUND_SYNC_INTERVAL_MS = 30000;
-const BACKGROUND_SYNC_INITIAL_DELAY_MS = 5000;
+const BACKGROUND_SYNC_INTERVAL_MS = 10000;
+const BACKGROUND_SYNC_INITIAL_DELAY_MS = 2000;
 const IMAP_SYNC_TIMEOUT_MS = 45000;
 let GmailService = GmailService_1 = class GmailService {
     constructor(prisma, spamFilterService, emailClassificationService, notificationsGateway, llmConfigService) {
@@ -36,6 +36,8 @@ let GmailService = GmailService_1 = class GmailService {
         this.logger = new common_1.Logger(GmailService_1.name);
         this.activeSyncPromise = null;
         this.backgroundSyncTimer = null;
+        this.incidentSummaryPromises = new Map();
+        this.mailboxMessageCountByPath = new Map();
     }
     async getConfig() {
         const config = await this.prisma.gmailConfig.findFirst({
@@ -174,6 +176,7 @@ let GmailService = GmailService_1 = class GmailService {
     async runBackgroundSync() {
         try {
             await this.syncInbox();
+            await this.retryPendingApprovedIncidents();
         }
         catch (error) {
             const message = error instanceof Error ? error.message : "Unknown background sync error";
@@ -319,9 +322,18 @@ let GmailService = GmailService_1 = class GmailService {
         await this.withTimeout(this.openMailboxForFetch(client, mailbox.path), IMAP_SYNC_TIMEOUT_MS, () => client.close());
         const totalMessages = client.mailbox ? client.mailbox.exists : 0;
         if (!totalMessages) {
+            this.mailboxMessageCountByPath.set(mailbox.path, 0);
             return messages;
         }
-        const start = Math.max(1, totalMessages - MAILBOX_RECENT_WINDOW_SIZE + 1);
+        const previousCount = this.mailboxMessageCountByPath.get(mailbox.path);
+        const hasOnlyNewAppends = previousCount !== undefined && totalMessages >= previousCount;
+        const hasNewMessages = hasOnlyNewAppends && totalMessages > previousCount;
+        if (previousCount !== undefined && !hasNewMessages && totalMessages === previousCount) {
+            return messages;
+        }
+        const start = hasNewMessages
+            ? previousCount + 1
+            : Math.max(1, totalMessages - MAILBOX_RECENT_WINDOW_SIZE + 1);
         const range = `${start}:*`;
         for await (const message of client.fetch(range, {
             envelope: true,
@@ -377,6 +389,7 @@ let GmailService = GmailService_1 = class GmailService {
                 detectedClientName: classification.detectedClientName
             });
         }
+        this.mailboxMessageCountByPath.set(mailbox.path, totalMessages);
         return messages;
     }
     async extractMessageContent(source) {
@@ -461,32 +474,90 @@ let GmailService = GmailService_1 = class GmailService {
         return sections.join("\n");
     }
     async ensureIncidentSummary(message, options) {
-        if (message.incidentSummary?.trim()) {
-            if (message.incidentCategory?.trim() && message.incidentStatus?.trim() && message.incidentSeverity?.trim()) {
-                return message;
+        let currentMessage = message;
+        if (currentMessage.incidentSummary?.trim()) {
+            try {
+                const normalizedSummary = await this.llmConfigService.normalizeIncidentSummary(currentMessage.incidentSummary);
+                if (normalizedSummary !== currentMessage.incidentSummary) {
+                    currentMessage = await this.prisma.emailMessage.update({
+                        where: { id: currentMessage.id },
+                        data: {
+                            incidentSummary: normalizedSummary
+                        }
+                    });
+                }
+                if (currentMessage.incidentCategory?.trim() &&
+                    currentMessage.incidentStatus?.trim() &&
+                    currentMessage.incidentSeverity?.trim()) {
+                    return currentMessage;
+                }
+            }
+            catch {
+                currentMessage = await this.prisma.emailMessage.update({
+                    where: { id: currentMessage.id },
+                    data: {
+                        incidentSummary: null,
+                        incidentCategory: null,
+                        incidentStatus: null,
+                        incidentSeverity: null,
+                        incidentSummaryModel: null,
+                        incidentSummaryGeneratedAt: null,
+                        incidentSummaryError: null,
+                        incidentSummaryLastAttemptAt: null
+                    }
+                });
             }
         }
+        const existingPromise = this.incidentSummaryPromises.get(currentMessage.id);
+        if (existingPromise) {
+            return existingPromise;
+        }
+        const incidentPromise = this.generateAndPersistIncidentSummary(currentMessage, options);
+        this.incidentSummaryPromises.set(currentMessage.id, incidentPromise);
+        try {
+            return await incidentPromise;
+        }
+        finally {
+            if (this.incidentSummaryPromises.get(currentMessage.id) === incidentPromise) {
+                this.incidentSummaryPromises.delete(currentMessage.id);
+            }
+        }
+    }
+    async generateAndPersistIncidentSummary(message, options) {
         const sourceText = this.buildIncidentSource(message);
         const extractedMetadata = this.extractIncidentMetadataFromMessage(message);
         try {
-            const generatedSummary = message.incidentSummary?.trim()
+            const generatedSummary = message.incidentSummary?.trim() && (await this.llmConfigService.isCompleteIncidentSummary(message.incidentSummary))
                 ? {
                     summary: message.incidentSummary,
+                    category: null,
+                    status: null,
+                    severity: null,
                     model: message.incidentSummaryModel ?? null
                 }
                 : await this.llmConfigService.generateIncidentSummary(sourceText);
             const reportMetadata = this.extractIncidentMetadataFromGeneratedReport(generatedSummary.summary);
-            const generatedMetadata = reportMetadata.category && reportMetadata.status && reportMetadata.severity
-                ? reportMetadata
-                : extractedMetadata.category && extractedMetadata.status && extractedMetadata.severity
-                    ? extractedMetadata
-                    : message.incidentCategory?.trim() && message.incidentStatus?.trim() && message.incidentSeverity?.trim()
-                        ? {
-                            category: message.incidentCategory,
-                            status: message.incidentStatus,
-                            severity: message.incidentSeverity
-                        }
-                        : await this.llmConfigService.generateIncidentMetadata(sourceText);
+            const generatedMetadata = generatedSummary.category && generatedSummary.status && generatedSummary.severity
+                ? {
+                    category: generatedSummary.category,
+                    status: generatedSummary.status,
+                    severity: generatedSummary.severity
+                }
+                : reportMetadata.category && reportMetadata.status && reportMetadata.severity
+                    ? reportMetadata
+                    : extractedMetadata.category && extractedMetadata.status && extractedMetadata.severity
+                        ? extractedMetadata
+                        : message.incidentCategory?.trim() && message.incidentStatus?.trim() && message.incidentSeverity?.trim()
+                            ? {
+                                category: message.incidentCategory,
+                                status: message.incidentStatus,
+                                severity: message.incidentSeverity
+                            }
+                            : {
+                                category: reportMetadata.category ?? extractedMetadata.category ?? message.incidentCategory?.trim() ?? null,
+                                status: reportMetadata.status ?? extractedMetadata.status ?? message.incidentStatus?.trim() ?? null,
+                                severity: reportMetadata.severity ?? extractedMetadata.severity ?? message.incidentSeverity?.trim() ?? null
+                            };
             return this.prisma.emailMessage.update({
                 where: { id: message.id },
                 data: {
@@ -495,7 +566,9 @@ let GmailService = GmailService_1 = class GmailService {
                     incidentStatus: generatedMetadata.status,
                     incidentSeverity: generatedMetadata.severity,
                     incidentSummaryModel: generatedSummary.model,
-                    incidentSummaryGeneratedAt: new Date()
+                    incidentSummaryGeneratedAt: new Date(),
+                    incidentSummaryError: null,
+                    incidentSummaryLastAttemptAt: new Date()
                 }
             });
         }
@@ -504,9 +577,140 @@ let GmailService = GmailService_1 = class GmailService {
                 throw error;
             }
             const messageText = error instanceof Error ? error.message : "No se pudo generar incidente";
+            await this.prisma.emailMessage.update({
+                where: { id: message.id },
+                data: {
+                    incidentSummaryError: messageText,
+                    incidentSummaryLastAttemptAt: new Date()
+                }
+            });
             this.logger.warn(`No se pudo generar incidente para ${message.gmailMessageId}: ${messageText}`);
-            return message;
+            return {
+                ...message,
+                incidentSummaryError: messageText,
+                incidentSummaryLastAttemptAt: new Date()
+            };
         }
+    }
+    buildStructuredIncidentSummaryFromMessage(message) {
+        const rawText = message.bodyText?.trim() || message.snippet?.trim();
+        if (!rawText) {
+            return null;
+        }
+        const jsonPayload = this.tryParseIncidentJsonPayload(rawText);
+        const normalized = this.normalizeIncidentBodyText(rawText);
+        const extractedMetadata = this.extractIncidentMetadataFromMessage(message);
+        const category = this.normalizeIncidentCategoryValue((jsonPayload?.categoriaIncidenteName ?? jsonPayload?.categoria) ?? undefined) ??
+            extractedMetadata.category;
+        const status = this.normalizeIncidentStatusValue(jsonPayload?.estado ?? undefined) ?? extractedMetadata.status;
+        const severity = this.normalizeIncidentSeverityValue(jsonPayload?.severidad ?? undefined) ?? extractedMetadata.severity;
+        const incidentCode = this.cleanIncidentField(jsonPayload?.name) ??
+            this.cleanIncidentField(jsonPayload?.codigoIncidente) ??
+            this.extractIncidentField(normalized, [
+                /Codigo incidente:\s*([^\n]+?)(?=\s{2,}|Severidad:|Fecha:|Cliente:|Estado:|$)/i
+            ]);
+        const client = this.cleanIncidentField(jsonPayload?.accountName) ??
+            this.cleanIncidentField(jsonPayload?.clienteServName) ??
+            this.extractIncidentField(normalized, [
+                /Cliente:\s*([^\n]+?)(?=\s{2,}|Estado:|Equipo afectado:|Generado por:|$)/i
+            ]);
+        const incidentNumber = this.cleanIncidentField(jsonPayload?.numIncidenteCliente) ??
+            this.extractIncidentField(normalized, [
+                /Num\.?\s*Inc\.?\s*Cliente:\s*([^\n]+?)(?=\s{2,}|Fecha y hora generado:|$)/i
+            ]);
+        const generatedAt = this.cleanIncidentField(jsonPayload?.fechaHoraGenerado) ??
+            this.extractIncidentField(normalized, [
+                /Fecha y hora generado:\s*([^\n]+?)(?=\s{2,}|Motor:|Subcategoria:|Subcategoría:|$)/i
+            ]);
+        const incidentDate = this.cleanIncidentField(jsonPayload?.fecha) ??
+            this.extractIncidentField(normalized, [/Fecha:\s*([^\n]+?)(?=\s{2,}|Cliente:|Estado:|$)/i]);
+        const equipment = this.cleanIncidentField(jsonPayload?.equipamientoName) ??
+            this.cleanIncidentField(jsonPayload?.equipoAfectadoName) ??
+            this.extractIncidentField(normalized, [
+                /Equipo afectado:\s*([^\n]+?)(?=\s{2,}|Generado por:|$)/i
+            ]);
+        const generatedBy = this.cleanIncidentField(jsonPayload?.createdByName) ??
+            this.cleanIncidentField(jsonPayload?.assignedUserName) ??
+            this.extractIncidentField(normalized, [
+                /Generado por:\s*([^\n]+?)(?=\s{2,}|Informacion del incidente|Información del incidente|$)/i
+            ]) ??
+            this.cleanIncidentField(message.fromName || message.fromEmail);
+        const motor = this.cleanIncidentField(jsonPayload?.equipoMonitorName) ??
+            this.cleanIncidentField(jsonPayload?.motor) ??
+            this.extractIncidentField(normalized, [/Motor:\s*([^\n]+?)(?=\s{2,}|Subcategoria:|Subcategoría:|$)/i]);
+        const source = this.cleanIncidentField(jsonPayload?.actoresGeneradores) ??
+            this.extractIncidentField(normalized, [/Origen:\s*([^\n]+?)(?=\s{2,}|Destino:|$)/i]);
+        const destination = this.cleanIncidentField(jsonPayload?.actoresReceptores) ??
+            this.extractIncidentField(normalized, [/Destino:\s*([^\n]+?)(?=\s{2,}|$)/i]);
+        const subcategory = this.cleanIncidentField(jsonPayload?.subcategoriaIncidenteName) ??
+            this.extractIncidentField(normalized, [
+                /Subcategoria:\s*([^\n]+?)(?=\s{2,}|Objeto en cuestion:|Objeto en cuestión:|$)/i,
+                /Subcategoría:\s*([^\n]+?)(?=\s{2,}|Objeto en cuestion:|Objeto en cuestión:|$)/i
+            ]);
+        const objectInQuestion = this.cleanIncidentField(jsonPayload?.objetoCuestion) ??
+            this.extractIncidentField(normalized, [
+                /Objeto en cuestion:\s*([^\n]+?)(?=\s{2,}|Afectacion:|Afectación:|$)/i,
+                /Objeto en cuestión:\s*([^\n]+?)(?=\s{2,}|Afectacion:|Afectación:|$)/i
+            ]);
+        const affectation = this.cleanIncidentField(jsonPayload?.afectacionImpacto) ??
+            this.extractIncidentField(normalized, [
+                /Afectacion:\s*([^\n]+?)(?=\s{2,}|Origen:|Destino:|Informacion adicional|Información adicional|$)/i,
+                /Afectación:\s*([^\n]+?)(?=\s{2,}|Origen:|Destino:|Informacion adicional|Información adicional|$)/i
+            ]);
+        const threat = this.cleanIncidentField(jsonPayload?.nombreAmenaza) ??
+            this.extractIncidentThreat(normalized, message.subject ?? "");
+        const technicalCommunication = this.cleanIncidentField(jsonPayload?.modulo) ??
+            this.deriveCommunicationType(category, threat, source, destination, affectation, normalized);
+        const narrativeContext = this.cleanIncidentField(jsonPayload?.descripcinDelIncidente) ?? this.cleanIncidentField(jsonPayload?.resumen);
+        const technicalSummary = this.buildTechnicalSummary(client, equipment, affectation, threat, source, destination, motor, status, narrativeContext);
+        if (!incidentCode && !client && !equipment && !affectation) {
+            return null;
+        }
+        const [displayDate, displayTime] = this.resolveIncidentDateAndTime(generatedAt, incidentDate, message.receivedAt);
+        const impactLines = this.buildImpactLines(affectation, technicalSummary);
+        const incidentType = category ? `Incidente de ${category.toLowerCase()}` : "Incidente";
+        const summary = [
+            "RESUMEN DEL INCIDENTE",
+            `Tipo: ${incidentType}`,
+            `Fecha deteccion: ${displayDate}`,
+            `Hora deteccion: ${displayTime}`,
+            `Origen: ${equipment ?? source ?? generatedBy ?? "No especificado"}`,
+            `Destino: ${destination ?? "No especificado"}`,
+            `Amenaza detectada: ${threat ?? "No especificada"}`,
+            "Impacto potencial:",
+            impactLines.join("\n"),
+            `Estado: ${status ?? "No especificado"}`,
+            "",
+            "DATOS DEL CLIENTE",
+            `Cliente: ${client ?? "No especificado"}`,
+            `Codigo de incidente: ${incidentCode ?? "No especificado"}`,
+            `Numero de incidente cliente: ${incidentNumber ?? "No especificado"}`,
+            `Severidad: ${severity ?? "No especificada"}`,
+            `Estado: ${status ?? "No especificado"}`,
+            `Fecha del incidente: ${displayDate}`,
+            "",
+            "INFRAESTRUCTURA AFECTADA",
+            `Equipo: ${equipment ?? "No especificado"}`,
+            `Generado por: ${generatedBy ?? "No especificado"}`,
+            `Motor: ${motor ?? "No especificado"}`,
+            "",
+            "DETALLES TECNICOS DEL INCIDENTE",
+            `Origen (IP interna): ${source ?? "No especificado"}`,
+            `Destino (IP externa): ${destination ?? "No especificado"}`,
+            `Subcategoria: ${subcategory ?? "No especificada"}`,
+            `Objeto en cuestion: ${objectInQuestion ?? "No especificado"}`,
+            `Tipo de comunicacion: ${technicalCommunication ?? "No especificado"}`,
+            "",
+            "RESUMEN TECNICO DEL INCIDENTE",
+            technicalSummary ?? "No se pudo construir un resumen tecnico con el contenido del correo."
+        ].join("\n");
+        return {
+            summary,
+            category,
+            status,
+            severity,
+            model: "template-extractor"
+        };
     }
     extractIncidentMetadataFromMessage(message) {
         const rawText = `${message.bodyText ?? ""}\n${message.snippet ?? ""}`;
@@ -559,7 +763,7 @@ let GmailService = GmailService_1 = class GmailService {
         return null;
     }
     normalizeIncidentStatusValue(value) {
-        const normalized = value?.trim().toLowerCase();
+        const normalized = this.normalizeIncidentMetaToken(value);
         if (!normalized) {
             return null;
         }
@@ -575,7 +779,7 @@ let GmailService = GmailService_1 = class GmailService {
         return null;
     }
     normalizeIncidentCategoryValue(value) {
-        const normalized = value?.trim().toLowerCase();
+        const normalized = this.normalizeIncidentMetaToken(value);
         if (!normalized) {
             return null;
         }
@@ -594,7 +798,7 @@ let GmailService = GmailService_1 = class GmailService {
         return null;
     }
     normalizeIncidentSeverityValue(value) {
-        const normalized = value?.trim().toLowerCase();
+        const normalized = this.normalizeIncidentMetaToken(value);
         if (!normalized) {
             return null;
         }
@@ -612,6 +816,143 @@ let GmailService = GmailService_1 = class GmailService {
         }
         return null;
     }
+    normalizeIncidentMetaToken(value) {
+        return value
+            ?.trim()
+            .toLowerCase()
+            .normalize("NFD")
+            .replace(/[\u0300-\u036f]/g, "") ?? null;
+    }
+    normalizeIncidentBodyText(value) {
+        return value
+            .replace(/\r\n?/g, "\n")
+            .replace(/\u00a0/g, " ")
+            .replace(/\*/g, "")
+            .replace(/[ \t]+\n/g, "\n")
+            .replace(/\n{3,}/g, "\n\n")
+            .trim();
+    }
+    tryParseIncidentJsonPayload(value) {
+        const trimmed = value.trim();
+        if (!trimmed.startsWith("{")) {
+            return null;
+        }
+        try {
+            return JSON.parse(trimmed);
+        }
+        catch {
+            return null;
+        }
+    }
+    extractIncidentField(text, patterns) {
+        for (const pattern of patterns) {
+            const match = text.match(pattern);
+            const value = this.cleanIncidentField(match?.[1]);
+            if (value) {
+                return value;
+            }
+        }
+        return null;
+    }
+    cleanIncidentField(value) {
+        const cleaned = value
+            ?.replace(/\[(?:https?:\/\/[^\]]+)\]/g, "")
+            ?.replace(/https?:\/\/\S+/g, "")
+            ?.replace(/\s+/g, " ")
+            ?.trim();
+        return cleaned ? cleaned : null;
+    }
+    extractIncidentThreat(normalizedBody, subject) {
+        const threat = this.extractIncidentField(normalizedBody, [
+            /Incidente [^:]+:\s*([^\n.]+?)(?=\.|Impacto:|Origen:|$)/i,
+            /Amenaza detectada:\s*([^\n]+)$/im
+        ]) ?? null;
+        if (threat) {
+            return threat;
+        }
+        const subjectSeverity = subject.match(/Incidente\[(.+?)\]/i)?.[1];
+        return subjectSeverity ? `Incidente ${subjectSeverity}` : null;
+    }
+    deriveCommunicationType(category, threat, source, destination, affectation, normalizedBody) {
+        if (threat?.trim()) {
+            return threat;
+        }
+        if (source && destination) {
+            return `Comunicacion ${source} -> ${destination}`;
+        }
+        if (affectation?.trim()) {
+            return affectation;
+        }
+        if (category === "Infraestructura" && /desconexion|disponibilidad|energia/i.test(normalizedBody)) {
+            return "Desconexion de infraestructura";
+        }
+        return null;
+    }
+    buildTechnicalSummary(client, equipment, affectation, threat, source, destination, motor, status, narrativeContext) {
+        const subject = client ?? "No especificado";
+        const event = threat ?? "un incidente operativo";
+        const asset = equipment ?? "el activo monitoreado";
+        const impact = affectation ?? narrativeContext ?? "con impacto operativo no especificado en el correo";
+        const context = source || destination
+            ? ` El evento involucra ${source ?? "origen no especificado"}${destination ? ` hacia ${destination}` : ""}.`
+            : "";
+        const monitor = motor ? ` Fue reportado por ${motor}.` : "";
+        const state = status ? ` Actualmente se encuentra en estado ${status}.` : "";
+        return this.fitTechnicalSummary(`${subject} presenta ${event} sobre ${asset}, asociado a ${impact}.${context}${monitor}${state}`);
+    }
+    fitTechnicalSummary(value) {
+        const normalized = value.replace(/\s+/g, " ").replace(/\.\s*\./g, ".").trim();
+        if (normalized.length >= 190 && normalized.length <= 430) {
+            return normalized;
+        }
+        if (normalized.length < 190) {
+            return `${normalized} Este contexto requiere validacion tecnica para confirmar la causa, el alcance real del incidente y las acciones de contencion o restablecimiento necesarias.`
+                .replace(/\s+/g, " ")
+                .slice(0, 430)
+                .trim();
+        }
+        const sliced = normalized.slice(0, 427);
+        const lastSentenceBreak = Math.max(sliced.lastIndexOf(". "), sliced.lastIndexOf("; "));
+        if (lastSentenceBreak >= 190) {
+            return `${sliced.slice(0, lastSentenceBreak + 1).trim()}`;
+        }
+        return `${sliced.trim()}...`;
+    }
+    buildImpactLines(affectation, technicalSummary) {
+        const sourceText = affectation ?? technicalSummary ?? "";
+        const segments = sourceText
+            .split(/\s*-\s+|[.;]\s+/)
+            .map((segment) => this.cleanIncidentField(segment))
+            .filter((segment) => Boolean(segment));
+        if (!segments.length) {
+            return ["No especificado"];
+        }
+        return segments.slice(0, 4);
+    }
+    resolveIncidentDateAndTime(generatedAt, incidentDate, receivedAt) {
+        const raw = generatedAt ?? incidentDate;
+        if (raw) {
+            const normalized = raw.trim();
+            const slashDateTime = normalized.match(/(\d{2}\/\d{2}\/\d{4})(?:\s+(\d{2}:\d{2}(?::\d{2})?))?/);
+            if (slashDateTime) {
+                return [slashDateTime[1], slashDateTime[2] ?? "No especificado"];
+            }
+            const isoDateTime = normalized.match(/(\d{4}-\d{2}-\d{2})(?:\s+(\d{2}:\d{2}(?::\d{2})?))?/);
+            if (isoDateTime) {
+                const [year, month, day] = isoDateTime[1].split("-");
+                return [`${day}/${month}/${year}`, isoDateTime[2] ?? "No especificado"];
+            }
+        }
+        const fallback = new Date(receivedAt);
+        const date = fallback.toLocaleDateString("es-BO", {
+            timeZone: "America/La_Paz"
+        });
+        const time = fallback.toLocaleTimeString("es-BO", {
+            hour12: false,
+            timeZone: "America/La_Paz"
+        });
+        return [date, time];
+    }
     async enrichApprovedMessagesInBackground(messages) {
         for (const message of messages) {
             const enriched = await this.ensureIncidentSummary(message, { silent: true });
@@ -622,6 +963,30 @@ let GmailService = GmailService_1 = class GmailService {
                 this.notificationsGateway.broadcastClassifiedMessage(enriched);
             }
         }
+    }
+    async retryPendingApprovedIncidents() {
+        const recentApprovedMessages = await this.prisma.emailMessage.findMany({
+            where: { status: client_1.MessageStatus.APPROVED },
+            orderBy: { receivedAt: "desc" },
+            take: 30
+        });
+        const pendingMessages = [];
+        for (const message of recentApprovedMessages) {
+            const hasValidSummary = await this.llmConfigService.isCompleteIncidentSummary(message.incidentSummary);
+            if (!hasValidSummary ||
+                !message.incidentCategory?.trim() ||
+                !message.incidentStatus?.trim() ||
+                !message.incidentSeverity?.trim()) {
+                pendingMessages.push(message);
+            }
+            if (pendingMessages.length >= 10) {
+                break;
+            }
+        }
+        if (!pendingMessages.length) {
+            return;
+        }
+        await this.enrichApprovedMessagesInBackground(pendingMessages);
     }
     async openMailboxForFetch(client, path) {
         const imapClient = client;

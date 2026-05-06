@@ -21,6 +21,8 @@ export declare class GmailService implements OnModuleInit, OnModuleDestroy {
     private readonly logger;
     private activeSyncPromise;
     private backgroundSyncTimer;
+    private readonly incidentSummaryPromises;
+    private readonly mailboxMessageCountByPath;
     constructor(prisma: PrismaService, spamFilterService: SpamFilterService, emailClassificationService: EmailClassificationService, notificationsGateway: NotificationsGateway, llmConfigService: LlmConfigService);
     getConfig(): Promise<{
         appPassword: undefined;
@@ -66,7 +68,6 @@ export declare class GmailService implements OnModuleInit, OnModuleDestroy {
         id: string;
         createdAt: Date;
         updatedAt: Date;
-        status: import(".prisma/client").$Enums.MessageStatus;
         gmailMessageId: string;
         fromName: string | null;
         fromEmail: string;
@@ -74,6 +75,7 @@ export declare class GmailService implements OnModuleInit, OnModuleDestroy {
         snippet: string | null;
         bodyText: string | null;
         receivedAt: Date;
+        status: import(".prisma/client").$Enums.MessageStatus;
         spamScore: number;
         spamReason: string | null;
         classificationReason: string | null;
@@ -86,13 +88,14 @@ export declare class GmailService implements OnModuleInit, OnModuleDestroy {
         incidentSeverity: string | null;
         incidentSummaryModel: string | null;
         incidentSummaryGeneratedAt: Date | null;
+        incidentSummaryError: string | null;
+        incidentSummaryLastAttemptAt: Date | null;
         labels: string[];
     }[]>;
     getClassifiedMessages(): Promise<{
         id: string;
         createdAt: Date;
         updatedAt: Date;
-        status: import(".prisma/client").$Enums.MessageStatus;
         gmailMessageId: string;
         fromName: string | null;
         fromEmail: string;
@@ -100,6 +103,7 @@ export declare class GmailService implements OnModuleInit, OnModuleDestroy {
         snippet: string | null;
         bodyText: string | null;
         receivedAt: Date;
+        status: import(".prisma/client").$Enums.MessageStatus;
         spamScore: number;
         spamReason: string | null;
         classificationReason: string | null;
@@ -112,6 +116,8 @@ export declare class GmailService implements OnModuleInit, OnModuleDestroy {
         incidentSeverity: string | null;
         incidentSummaryModel: string | null;
         incidentSummaryGeneratedAt: Date | null;
+        incidentSummaryError: string | null;
+        incidentSummaryLastAttemptAt: Date | null;
         labels: string[];
     }[]>;
     getMessageSummary(): Promise<{
@@ -123,7 +129,6 @@ export declare class GmailService implements OnModuleInit, OnModuleDestroy {
         id: string;
         createdAt: Date;
         updatedAt: Date;
-        status: import(".prisma/client").$Enums.MessageStatus;
         gmailMessageId: string;
         fromName: string | null;
         fromEmail: string;
@@ -131,6 +136,7 @@ export declare class GmailService implements OnModuleInit, OnModuleDestroy {
         snippet: string | null;
         bodyText: string | null;
         receivedAt: Date;
+        status: import(".prisma/client").$Enums.MessageStatus;
         spamScore: number;
         spamReason: string | null;
         classificationReason: string | null;
@@ -143,6 +149,8 @@ export declare class GmailService implements OnModuleInit, OnModuleDestroy {
         incidentSeverity: string | null;
         incidentSummaryModel: string | null;
         incidentSummaryGeneratedAt: Date | null;
+        incidentSummaryError: string | null;
+        incidentSummaryLastAttemptAt: Date | null;
         labels: string[];
     }>;
     syncInbox(): Promise<SyncInboxResult>;
@@ -164,13 +172,27 @@ export declare class GmailService implements OnModuleInit, OnModuleDestroy {
     private createSnippet;
     private buildIncidentSource;
     private ensureIncidentSummary;
+    private generateAndPersistIncidentSummary;
+    private buildStructuredIncidentSummaryFromMessage;
     private extractIncidentMetadataFromMessage;
     private extractIncidentMetadataFromGeneratedReport;
     private inferIncidentCategory;
     private normalizeIncidentStatusValue;
     private normalizeIncidentCategoryValue;
     private normalizeIncidentSeverityValue;
+    private normalizeIncidentMetaToken;
+    private normalizeIncidentBodyText;
+    private tryParseIncidentJsonPayload;
+    private extractIncidentField;
+    private cleanIncidentField;
+    private extractIncidentThreat;
+    private deriveCommunicationType;
+    private buildTechnicalSummary;
+    private fitTechnicalSummary;
+    private buildImpactLines;
+    private resolveIncidentDateAndTime;
     private enrichApprovedMessagesInBackground;
+    private retryPendingApprovedIncidents;
     private openMailboxForFetch;
     private withTimeout;
     private normalizeRuleConfig;

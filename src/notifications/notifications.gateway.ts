@@ -36,7 +36,9 @@ export class NotificationsGateway {
       incidentStatus: message.incidentStatus,
       incidentSeverity: message.incidentSeverity,
       incidentSummaryModel: message.incidentSummaryModel,
-      incidentSummaryGeneratedAt: message.incidentSummaryGeneratedAt
+      incidentSummaryGeneratedAt: message.incidentSummaryGeneratedAt,
+      incidentSummaryError: message.incidentSummaryError,
+      incidentSummaryLastAttemptAt: message.incidentSummaryLastAttemptAt
     });
   }
 

@@ -49,7 +49,6 @@ export declare class GmailInboxAdapter implements MailInboxPort {
         id: string;
         createdAt: Date;
         updatedAt: Date;
-        status: import(".prisma/client").$Enums.MessageStatus;
         gmailMessageId: string;
         fromName: string | null;
         fromEmail: string;
@@ -57,6 +56,7 @@ export declare class GmailInboxAdapter implements MailInboxPort {
         snippet: string | null;
         bodyText: string | null;
         receivedAt: Date;
+        status: import(".prisma/client").$Enums.MessageStatus;
         spamScore: number;
         spamReason: string | null;
         classificationReason: string | null;
@@ -69,13 +69,14 @@ export declare class GmailInboxAdapter implements MailInboxPort {
         incidentSeverity: string | null;
         incidentSummaryModel: string | null;
         incidentSummaryGeneratedAt: Date | null;
+        incidentSummaryError: string | null;
+        incidentSummaryLastAttemptAt: Date | null;
         labels: string[];
     }[]>;
     getClassifiedMessages(): Promise<{
         id: string;
         createdAt: Date;
         updatedAt: Date;
-        status: import(".prisma/client").$Enums.MessageStatus;
         gmailMessageId: string;
         fromName: string | null;
         fromEmail: string;
@@ -83,6 +84,7 @@ export declare class GmailInboxAdapter implements MailInboxPort {
         snippet: string | null;
         bodyText: string | null;
         receivedAt: Date;
+        status: import(".prisma/client").$Enums.MessageStatus;
         spamScore: number;
         spamReason: string | null;
         classificationReason: string | null;
@@ -95,6 +97,8 @@ export declare class GmailInboxAdapter implements MailInboxPort {
         incidentSeverity: string | null;
         incidentSummaryModel: string | null;
         incidentSummaryGeneratedAt: Date | null;
+        incidentSummaryError: string | null;
+        incidentSummaryLastAttemptAt: Date | null;
         labels: string[];
     }[]>;
     getMessageSummary(): Promise<{
@@ -106,7 +110,6 @@ export declare class GmailInboxAdapter implements MailInboxPort {
         id: string;
         createdAt: Date;
         updatedAt: Date;
-        status: import(".prisma/client").$Enums.MessageStatus;
         gmailMessageId: string;
         fromName: string | null;
         fromEmail: string;
@@ -114,6 +117,7 @@ export declare class GmailInboxAdapter implements MailInboxPort {
         snippet: string | null;
         bodyText: string | null;
         receivedAt: Date;
+        status: import(".prisma/client").$Enums.MessageStatus;
         spamScore: number;
         spamReason: string | null;
         classificationReason: string | null;
@@ -126,6 +130,8 @@ export declare class GmailInboxAdapter implements MailInboxPort {
         incidentSeverity: string | null;
         incidentSummaryModel: string | null;
         incidentSummaryGeneratedAt: Date | null;
+        incidentSummaryError: string | null;
+        incidentSummaryLastAttemptAt: Date | null;
         labels: string[];
     }>;
     syncInbox(): Promise<{

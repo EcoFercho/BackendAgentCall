@@ -11,6 +11,12 @@ type IncidentMetadata = {
   status: string | null;
   severity: string | null;
 };
+type GeneratedIncidentSummary = IncidentMetadata & {
+  summary: string;
+  provider: LlmProviderType;
+  providerName: "LOCAL" | RemoteLlmProvider;
+  model: string;
+};
 const DEFAULT_LLM_REFERENCE_MARKDOWN = `# Skill: Analista de Incidentes SOC y NOC
 ## Rol
 Eres un analista tecnico de incidentes de seguridad e infraestructura. Debes leer texto libre, correos, alertas, tickets o bloques mezclados y devolver un reporte estructurado exactamente en el formato indicado.
@@ -114,6 +120,25 @@ const REMOTE_PROVIDER_PRESETS: Record<RemoteLlmProvider, { baseUrl: string; gene
 export class LlmConfigService {
   constructor(private readonly prisma: PrismaService) {}
 
+  async normalizeIncidentSummary(value: string) {
+    const referenceMarkdown = await this.getCurrentReferenceMarkdown();
+    const normalized = this.extractFinalIncidentSummary(value, referenceMarkdown);
+    if (!this.matchesConfiguredTemplate(normalized, referenceMarkdown)) {
+      throw new BadRequestException("El reporte no respeta la estructura completa configurada.");
+    }
+
+    return normalized;
+  }
+
+  async isCompleteIncidentSummary(value?: string | null) {
+    if (!value?.trim()) {
+      return false;
+    }
+
+    const referenceMarkdown = await this.getCurrentReferenceMarkdown();
+    return this.matchesConfiguredTemplate(value, referenceMarkdown);
+  }
+
   async getConfig() {
     const config = await this.prisma.llmConfig.findUnique({
       where: { configKey: DEFAULT_CONFIG_KEY }
@@ -193,6 +218,12 @@ export class LlmConfigService {
       where: { configKey: DEFAULT_CONFIG_KEY }
     });
 
+    if (command.providerType === LlmProviderType.LOCAL) {
+      const defaults = this.getDefaultConfig();
+      const baseUrl = command.localBaseUrl?.trim() || existing?.localBaseUrl || defaults.localBaseUrl;
+      return this.fetchLocalModels(baseUrl);
+    }
+
     const providerName = this.normalizeRemoteProvider(command.providerName);
     if (!providerName) {
       throw new BadRequestException("Selecciona un proveedor API valido.");
@@ -231,11 +262,17 @@ export class LlmConfigService {
     const generated = await this.generateConfiguredText(prompt, config, defaults);
 
     return {
-      summary: this.extractFinalIncidentSummary(generated.text),
+      summary: await this.normalizeIncidentSummaryWithReference(
+        generated.text,
+        config?.referenceMarkdown ?? defaults.referenceMarkdown
+      ),
+      category: null,
+      status: null,
+      severity: null,
       provider: generated.provider,
       providerName: generated.providerName,
       model: generated.model
-    };
+    } satisfies GeneratedIncidentSummary;
   }
 
   async generateIncidentMetadata(userText: string): Promise<IncidentMetadata> {
@@ -658,34 +695,93 @@ export class LlmConfigService {
     return value.replace(/\r\n?/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
   }
 
-  private extractFinalIncidentSummary(value: string) {
-    const normalized = this.normalizeGeneratedText(value);
-    const fullReportMarker = "RESUMEN DEL INCIDENTE";
-    const fullReportIndex = normalized.toUpperCase().lastIndexOf(fullReportMarker);
+  private extractFinalIncidentSummary(value: string, referenceMarkdown: string) {
+    const legacySummary = this.extractSummaryFromLegacyJsonEnvelope(value);
+    const normalized = this.normalizeGeneratedText(legacySummary ?? value);
+    const fullReportMarker = this.extractTemplateMarkers(referenceMarkdown)[0] ?? "RESUMEN DEL INCIDENTE";
+    const fullReportIndex = normalized.toUpperCase().lastIndexOf(fullReportMarker.toUpperCase());
     if (fullReportIndex >= 0) {
       return normalized.slice(fullReportIndex).trim();
     }
 
-    const marker = "RESUMEN TECNICO DEL INCIDENTE";
-    const markerIndex = normalized.toUpperCase().lastIndexOf(marker);
+    throw new BadRequestException("El modelo no devolvio el reporte completo con la estructura requerida.");
+  }
 
-    if (markerIndex >= 0) {
-      const summaryBlock = normalized.slice(markerIndex).trim();
-      const paragraph = summaryBlock
-        .replace(/^RESUMEN TECNICO DEL INCIDENTE\s*:?\s*/i, "")
-        .replace(/\r\n?/g, " ")
-        .replace(/\s{2,}/g, " ")
-        .trim();
+  private async getCurrentReferenceMarkdown() {
+    const config = await this.prisma.llmConfig.findUnique({
+      where: { configKey: DEFAULT_CONFIG_KEY }
+    });
 
-      return `RESUMEN TECNICO DEL INCIDENTE\n\n${paragraph}`;
+    return config?.referenceMarkdown ?? DEFAULT_LLM_REFERENCE_MARKDOWN;
+  }
+
+  private async normalizeIncidentSummaryWithReference(value: string, referenceMarkdown: string) {
+    const normalized = this.extractFinalIncidentSummary(value, referenceMarkdown);
+    if (!this.matchesConfiguredTemplate(normalized, referenceMarkdown)) {
+      throw new BadRequestException("El reporte no respeta la estructura completa configurada.");
     }
 
-    const paragraph = normalized
-      .replace(/\r\n?/g, " ")
-      .replace(/\s{2,}/g, " ")
-      .trim();
+    return normalized;
+  }
 
-    return `RESUMEN TECNICO DEL INCIDENTE\n\n${paragraph}`;
+  private matchesConfiguredTemplate(value: string, referenceMarkdown: string) {
+    const normalized = this.normalizeGeneratedText(value);
+    const markers = this.extractTemplateMarkers(referenceMarkdown);
+
+    if (!markers.length) {
+      return normalized.length > 0;
+    }
+
+    let searchFrom = 0;
+    for (const marker of markers) {
+      const index = normalized.indexOf(marker, searchFrom);
+      if (index < 0) {
+        return false;
+      }
+
+      searchFrom = index + marker.length;
+    }
+
+    return true;
+  }
+
+  private extractTemplateMarkers(referenceMarkdown: string) {
+    const plantillaMatch = referenceMarkdown.match(/##\s*Plantilla obligatoria\s*([\s\S]*?)(?:\n##\s|$)/i);
+    const plantillaBlock = plantillaMatch?.[1] ?? "";
+
+    return plantillaBlock
+      .replace(/\r\n?/g, "\n")
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .filter((line) => !/^<.+>$/.test(line))
+      .map((line) => {
+        if (!line.includes(":")) {
+          return line;
+        }
+
+        return line.replace(/\s*<.*$/, "").trim();
+      });
+  }
+
+  private extractSummaryFromLegacyJsonEnvelope(value: string) {
+    const match = value
+      .trim()
+      .match(/"summary"\s*:\s*"([\s\S]*?)"\s*,\s*"(?:category|provider|providerName|model)"/i);
+
+    if (!match?.[1]) {
+      return null;
+    }
+
+    try {
+      return JSON.parse(`"${match[1]}"`) as string;
+    } catch {
+      return match[1]
+        .replace(/\\"/g, "\"")
+        .replace(/\\n/g, "\n")
+        .replace(/\\r/g, "")
+        .replace(/\\\\/g, "\\");
+    }
   }
 
   private parseIncidentMetadata(value: string): IncidentMetadata {
@@ -706,6 +802,7 @@ export class LlmConfigService {
 
     try {
       return JSON.parse(sanitized) as {
+        summary?: string;
         category?: string;
         status?: string;
         severity?: string;
@@ -716,12 +813,13 @@ export class LlmConfigService {
         return null;
       }
 
-      try {
-        return JSON.parse(match[0]) as {
-          category?: string;
-          status?: string;
-          severity?: string;
-        };
+        try {
+          return JSON.parse(match[0]) as {
+            summary?: string;
+            category?: string;
+            status?: string;
+            severity?: string;
+          };
       } catch {
         return null;
       }
@@ -750,7 +848,7 @@ export class LlmConfigService {
   }
 
   private normalizeIncidentStatus(value?: string | null) {
-    const normalized = value?.trim().toLowerCase();
+    const normalized = this.normalizeIncidentMetaToken(value);
     if (!normalized) {
       return null;
     }
@@ -771,7 +869,7 @@ export class LlmConfigService {
   }
 
   private normalizeIncidentSeverity(value?: string | null) {
-    const normalized = value?.trim().toLowerCase();
+    const normalized = this.normalizeIncidentMetaToken(value);
     if (!normalized) {
       return null;
     }
@@ -793,6 +891,14 @@ export class LlmConfigService {
     }
 
     return "Desconocido";
+  }
+
+  private normalizeIncidentMetaToken(value?: string | null) {
+    return value
+      ?.trim()
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "") ?? null;
   }
 
   private async fetchOpenAiModels(apiKey: string) {
@@ -855,6 +961,18 @@ export class LlmConfigService {
       .sort((left, right) => left.id.localeCompare(right.id));
   }
 
+  private async fetchLocalModels(baseUrl: string) {
+    const data = await this.fetchProviderJson<{
+      models?: Array<{ name?: string; model?: string }>;
+    }>("LOCAL" as RemoteLlmProvider, `${this.normalizeUrlLike(baseUrl)}/api/tags`);
+
+    return (data.models ?? [])
+      .map((model) => model.name?.trim() || model.model?.trim() || "")
+      .filter((modelId): modelId is string => Boolean(modelId))
+      .sort((left, right) => left.localeCompare(right))
+      .map((modelId) => ({ id: modelId, label: modelId }));
+  }
+
   private async fetchProviderJson<T>(
     providerName: RemoteLlmProvider,
     url: string,
@@ -879,41 +997,68 @@ export class LlmConfigService {
       timeoutMs: number;
     }
   ) {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), options.timeoutMs);
+    const maxAttempts = options.method === "POST" ? 2 : 1;
+    let lastError: unknown;
 
-    try {
-      const response = await fetch(url, {
-        method: options.method,
-        headers: {
-          ...(options.body === undefined ? {} : { "content-type": "application/json" }),
-          ...(options.headers ?? {})
-        },
-        body: options.body === undefined ? undefined : JSON.stringify(options.body),
-        signal: controller.signal
-      });
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), options.timeoutMs);
 
-      if (!response.ok) {
-        const errorBody = await response.text();
-        throw new BadRequestException(
-          this.buildProviderErrorMessage(providerName, response.status, errorBody)
-        );
+      try {
+        const response = await fetch(url, {
+          method: options.method,
+          headers: {
+            ...(options.body === undefined ? {} : { "content-type": "application/json" }),
+            ...(options.headers ?? {})
+          },
+          body: options.body === undefined ? undefined : JSON.stringify(options.body),
+          signal: controller.signal
+        });
+
+        if (!response.ok) {
+          const errorBody = await response.text();
+          const canRetry = attempt < maxAttempts && (response.status >= 500 || response.status === 429);
+          if (canRetry) {
+            await this.delay(1200 * attempt);
+            continue;
+          }
+
+          throw new BadRequestException(
+            this.buildProviderErrorMessage(providerName, response.status, errorBody)
+          );
+        }
+
+        return (await response.json()) as T;
+      } catch (error) {
+        lastError = error;
+
+        if (error instanceof BadRequestException) {
+          throw error;
+        }
+
+        if (error instanceof Error && error.name === "AbortError") {
+          throw new BadRequestException(`La solicitud a ${providerName} excedio el tiempo limite.`);
+        }
+
+        const canRetry = attempt < maxAttempts;
+        if (canRetry) {
+          await this.delay(1200 * attempt);
+          continue;
+        }
+
+        throw new BadRequestException(`No se pudo completar la solicitud a ${providerName}.`);
+      } finally {
+        clearTimeout(timeoutId);
       }
-
-      return (await response.json()) as T;
-    } catch (error) {
-      if (error instanceof BadRequestException) {
-        throw error;
-      }
-
-      if (error instanceof Error && error.name === "AbortError") {
-        throw new BadRequestException(`La solicitud a ${providerName} excedio el tiempo limite.`);
-      }
-
-      throw new BadRequestException(`No se pudo completar la solicitud a ${providerName}.`);
-    } finally {
-      clearTimeout(timeoutId);
     }
+
+    throw lastError instanceof BadRequestException
+      ? lastError
+      : new BadRequestException(`No se pudo completar la solicitud a ${providerName}.`);
+  }
+
+  private delay(ms: number) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   private buildProviderErrorMessage(providerName: string, status: number, errorBody: string) {
