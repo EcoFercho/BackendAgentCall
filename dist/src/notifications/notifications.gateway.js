@@ -13,8 +13,8 @@ exports.NotificationsGateway = void 0;
 const websockets_1 = require("@nestjs/websockets");
 const socket_io_1 = require("socket.io");
 let NotificationsGateway = class NotificationsGateway {
-    broadcastTicker(message) {
-        this.server.emit("ticker.email-approved", {
+    broadcastClassifiedMessage(message) {
+        this.server.emit("ticker.email-classified", {
             id: message.id,
             fromName: message.fromName,
             fromEmail: message.fromEmail,
@@ -28,9 +28,15 @@ let NotificationsGateway = class NotificationsGateway {
             matchedRules: message.matchedRules,
             detectedClientName: message.detectedClientName,
             incidentSummary: message.incidentSummary,
+            incidentCategory: message.incidentCategory,
+            incidentStatus: message.incidentStatus,
+            incidentSeverity: message.incidentSeverity,
             incidentSummaryModel: message.incidentSummaryModel,
             incidentSummaryGeneratedAt: message.incidentSummaryGeneratedAt
         });
+    }
+    broadcastMessageSummary(summary) {
+        this.server.emit("ticker.summary", summary);
     }
 };
 exports.NotificationsGateway = NotificationsGateway;

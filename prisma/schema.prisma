@@ -68,6 +68,9 @@ model EmailMessage {
   matchedRules             String[]      @default([])
   detectedClientName       String?
   incidentSummary          String?
+  incidentCategory         String?
+  incidentStatus           String?
+  incidentSeverity         String?
   incidentSummaryModel     String?
   incidentSummaryGeneratedAt DateTime?
   labels                   String[]

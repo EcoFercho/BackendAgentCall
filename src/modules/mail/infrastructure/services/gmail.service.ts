@@ -247,6 +247,7 @@ export class GmailService implements OnModuleInit, OnModuleDestroy {
           const messages = Array.from(messagesById.values()).sort((left, right) => {
             return new Date(right.receivedAt).getTime() - new Date(left.receivedAt).getTime();
           });
+          const approvedMessagesPendingIncident: EmailMessage[] = [];
 
           for (const email of messages) {
             const saved = await this.prisma.emailMessage.upsert({
@@ -256,8 +257,13 @@ export class GmailService implements OnModuleInit, OnModuleDestroy {
             });
 
             if (saved.status === MessageStatus.APPROVED) {
-              const messageWithIncident = await this.ensureIncidentSummary(saved, { silent: true });
-              this.notificationsGateway.broadcastTicker(messageWithIncident);
+              this.notificationsGateway.broadcastClassifiedMessage(saved);
+              approvedMessagesPendingIncident.push(saved);
+              continue;
+            }
+
+            if (saved.status === MessageStatus.IRRELEVANT || saved.status === MessageStatus.SPAM) {
+              this.notificationsGateway.broadcastClassifiedMessage(saved);
             }
           }
 
@@ -265,6 +271,14 @@ export class GmailService implements OnModuleInit, OnModuleDestroy {
             where: { id: config.id },
             data: { lastSyncAt: syncStartedAt, lastConnectionAt: syncStartedAt }
           });
+
+          const summary = await this.getMessageSummary();
+          this.notificationsGateway.broadcastMessageSummary({
+            classifiedCount: summary.classifiedCount,
+            approvedCount: summary.approvedCount,
+            lastSyncedAt: syncStartedAt.toISOString()
+          });
+          void this.enrichApprovedMessagesInBackground(approvedMessagesPendingIncident);
 
           return {
             synced: messages.length,
@@ -556,19 +570,43 @@ export class GmailService implements OnModuleInit, OnModuleDestroy {
 
   private async ensureIncidentSummary(message: EmailMessage, options?: { silent?: boolean }) {
     if (message.incidentSummary?.trim()) {
-      return message;
+      if (message.incidentCategory?.trim() && message.incidentStatus?.trim() && message.incidentSeverity?.trim()) {
+        return message;
+      }
     }
 
     const sourceText = this.buildIncidentSource(message);
+    const extractedMetadata = this.extractIncidentMetadataFromMessage(message);
 
     try {
-      const generated = await this.llmConfigService.generateIncidentSummary(sourceText);
+      const generatedSummary = message.incidentSummary?.trim()
+        ? {
+            summary: message.incidentSummary,
+            model: message.incidentSummaryModel ?? null
+          }
+        : await this.llmConfigService.generateIncidentSummary(sourceText);
+      const reportMetadata = this.extractIncidentMetadataFromGeneratedReport(generatedSummary.summary);
+      const generatedMetadata =
+        reportMetadata.category && reportMetadata.status && reportMetadata.severity
+          ? reportMetadata
+          : extractedMetadata.category && extractedMetadata.status && extractedMetadata.severity
+            ? extractedMetadata
+            : message.incidentCategory?.trim() && message.incidentStatus?.trim() && message.incidentSeverity?.trim()
+              ? {
+                  category: message.incidentCategory,
+                  status: message.incidentStatus,
+                  severity: message.incidentSeverity
+                }
+              : await this.llmConfigService.generateIncidentMetadata(sourceText);
 
       return this.prisma.emailMessage.update({
         where: { id: message.id },
         data: {
-          incidentSummary: generated.summary,
-          incidentSummaryModel: generated.model,
+          incidentSummary: generatedSummary.summary,
+          incidentCategory: generatedMetadata.category,
+          incidentStatus: generatedMetadata.status,
+          incidentSeverity: generatedMetadata.severity,
+          incidentSummaryModel: generatedSummary.model,
           incidentSummaryGeneratedAt: new Date()
         }
       });
@@ -580,6 +618,156 @@ export class GmailService implements OnModuleInit, OnModuleDestroy {
       const messageText = error instanceof Error ? error.message : "No se pudo generar incidente";
       this.logger.warn(`No se pudo generar incidente para ${message.gmailMessageId}: ${messageText}`);
       return message;
+    }
+  }
+
+  private extractIncidentMetadataFromMessage(message: Pick<EmailMessage, "bodyText" | "snippet" | "classificationReason">) {
+    const rawText = `${message.bodyText ?? ""}\n${message.snippet ?? ""}`;
+    const normalized = rawText.replace(/\*/g, "").replace(/\r\n?/g, "\n");
+    const severityMatch = normalized.match(/Severidad:\s*([A-Za-zÁÉÍÓÚáéíóú]+)/i);
+    const statusMatch = normalized.match(/Estado:\s*([A-Za-zÁÉÍÓÚáéíóú]+)/i);
+
+    return {
+      category: this.inferIncidentCategory(normalized, message.classificationReason ?? ""),
+      status: this.normalizeIncidentStatusValue(statusMatch?.[1]),
+      severity: this.normalizeIncidentSeverityValue(severityMatch?.[1])
+    };
+  }
+
+  private extractIncidentMetadataFromGeneratedReport(report: string) {
+    const normalized = report.replace(/\r\n?/g, "\n");
+    const typeMatch = normalized.match(/^Tipo:\s*(.+)$/im);
+    const severityMatch = normalized.match(/^Severidad:\s*(.+)$/im);
+    const statusMatches = Array.from(normalized.matchAll(/^Estado:\s*(.+)$/gim));
+    const primaryStatus = statusMatches[0]?.[1] ?? statusMatches[1]?.[1];
+
+    return {
+      category: this.normalizeIncidentCategoryValue(typeMatch?.[1]),
+      status: this.normalizeIncidentStatusValue(primaryStatus),
+      severity: this.normalizeIncidentSeverityValue(severityMatch?.[1])
+    };
+  }
+
+  private inferIncidentCategory(bodyText: string, classificationReason: string) {
+    const normalized = `${bodyText}\n${classificationReason}`.toLowerCase();
+
+    if (
+      normalized.includes("security") ||
+      normalized.includes("malware") ||
+      normalized.includes("mitm") ||
+      normalized.includes("c2") ||
+      normalized.includes("actividad maliciosa") ||
+      normalized.includes("vpn sospechosa")
+    ) {
+      return "Seguridad";
+    }
+
+    if (
+      normalized.includes("infraestructura") ||
+      normalized.includes("hardware") ||
+      normalized.includes("ap leave") ||
+      normalized.includes("desconexion") ||
+      normalized.includes("fortigate") ||
+      normalized.includes("enlace") ||
+      normalized.includes("disponibilidad")
+    ) {
+      return "Infraestructura";
+    }
+
+    if (normalized.includes("aplicacion") || normalized.includes("application")) {
+      return "Aplicacion";
+    }
+
+    if (normalized.includes("red") || normalized.includes("network")) {
+      return "Red";
+    }
+
+    return null;
+  }
+
+  private normalizeIncidentStatusValue(value?: string) {
+    const normalized = value?.trim().toLowerCase();
+    if (!normalized) {
+      return null;
+    }
+
+    if (normalized.includes("resuelto")) {
+      return "Resuelto";
+    }
+
+    if (normalized.includes("investig")) {
+      return "Investigando";
+    }
+
+    if (normalized.includes("identific")) {
+      return "Identificado";
+    }
+
+    return null;
+  }
+
+  private normalizeIncidentCategoryValue(value?: string) {
+    const normalized = value?.trim().toLowerCase();
+    if (!normalized) {
+      return null;
+    }
+
+    if (normalized.includes("infra")) {
+      return "Infraestructura";
+    }
+
+    if (normalized.includes("segur")) {
+      return "Seguridad";
+    }
+
+    if (normalized.includes("aplica")) {
+      return "Aplicacion";
+    }
+
+    if (normalized.includes("red")) {
+      return "Red";
+    }
+
+    return null;
+  }
+
+  private normalizeIncidentSeverityValue(value?: string) {
+    const normalized = value?.trim().toLowerCase();
+    if (!normalized) {
+      return null;
+    }
+
+    if (normalized.includes("crit")) {
+      return "Critica";
+    }
+
+    if (normalized.includes("alta")) {
+      return "Alta";
+    }
+
+    if (normalized.includes("media") || normalized.includes("medi")) {
+      return "Media";
+    }
+
+    if (normalized.includes("baja")) {
+      return "Baja";
+    }
+
+    return null;
+  }
+
+  private async enrichApprovedMessagesInBackground(messages: EmailMessage[]) {
+    for (const message of messages) {
+      const enriched = await this.ensureIncidentSummary(message, { silent: true });
+
+      if (
+        enriched.incidentSummary !== message.incidentSummary ||
+        enriched.incidentCategory !== message.incidentCategory ||
+        enriched.incidentStatus !== message.incidentStatus ||
+        enriched.incidentSeverity !== message.incidentSeverity
+      ) {
+        this.notificationsGateway.broadcastClassifiedMessage(enriched);
+      }
     }
   }
 

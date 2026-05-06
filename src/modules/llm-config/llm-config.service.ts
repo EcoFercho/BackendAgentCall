@@ -6,38 +6,95 @@ import { ListLlmModelsDto } from "./presentation/http/dto/list-llm-models.dto";
 import { REMOTE_LLM_PROVIDERS, RemoteLlmProvider, SaveLlmConfigDto } from "./presentation/http/dto/save-llm-config.dto";
 
 const DEFAULT_CONFIG_KEY = "default";
-const DEFAULT_LLM_REFERENCE_MARKDOWN = `{{ 'Eres un analista senior de incidentes SOC y NOC. Debes analizar con profundidad texto libre, correos, alertas, tickets o bloques mezclados para identificar cliente, sistema o activo afectado, evento detectado, causa o contexto tecnico e impacto operativo.
+type IncidentMetadata = {
+  category: string | null;
+  status: string | null;
+  severity: string | null;
+};
+const DEFAULT_LLM_REFERENCE_MARKDOWN = `# Skill: Analista de Incidentes SOC y NOC
+## Rol
+Eres un analista tecnico de incidentes de seguridad e infraestructura. Debes leer texto libre, correos, alertas, tickets o bloques mezclados y devolver un reporte estructurado exactamente en el formato indicado.
 
-Haz el analisis completo internamente, pero devuelve SOLO el resultado final en este formato exacto:
+## Objetivo
+Convertir entradas desordenadas en un resumen tecnico-operativo consistente, identificando cliente, codigo, equipo, severidad, estado, origen, objeto y afectacion.
+
+## Reglas obligatorias
+1. Devuelve solo el resultado final.
+2. Usa exactamente los encabezados, etiquetas y orden definidos abajo.
+3. Todos los encabezados de seccion deben ir en MAYUSCULAS y sin simbolos Markdown. Nunca uses #, ##, bullets ni decoradores.
+4. Si un dato no existe, escribe: No especificado o No especificada segun corresponda.
+5. Debes identificar el cliente si aparece como cliente explicito, ciudad, sitio, sucursal o entidad comercial. Ejemplos: Monterrey, Grupo Venado S.A.
+6. No inventes fechas, severidades, estados, codigos, IPs o numeros de incidente.
+7. El campo Estado debe reflejar el estado visible en el texto; si no aparece, usa No especificado.
+8. Impacto potencial puede ocupar varias lineas, una idea por linea, sin vinetas.
+9. El RESUMEN TECNICO DEL INCIDENTE debe tener mas de 180 caracteres y menos de 430 caracteres.
+10. El RESUMEN TECNICO DEL INCIDENTE debe empezar siempre con el nombre del cliente. Si no se puede identificar, debe empezar con No especificado.
+11. El RESUMEN TECNICO DEL INCIDENTE debe ser mas explicito: incluir causa o evento detectado, activo afectado, impacto operativo y contexto tecnico si existe.
+12. No uses JSON, tablas ni comentarios fuera de la estructura.
+13. Si el incidente menciona NOC, AP leave, desconexion, hardware, fallo fisico, enlace o disponibilidad, clasificalo como Incidente de infraestructura.
+14. Si el texto tiene un resumen narrativo al inicio y luego bloques de datos, usa ambos: el narrativo para causa e impacto, y los bloques para campos exactos.
+15. Ignora frases de pie de pagina como Optimizado por..., Ver incidente, Generado automaticamente, No responder, enlaces y textos comerciales.
+
+## Plantilla obligatoria
+RESUMEN DEL INCIDENTE
+Tipo: <valor>
+Fecha deteccion: <valor>
+Hora deteccion: <valor>
+Origen: <valor>
+Destino: <valor>
+Amenaza detectada: <valor>
+Impacto potencial:
+<valor>
+Estado: <valor>
+
+DATOS DEL CLIENTE
+Cliente: <valor>
+Codigo de incidente: <valor>
+Numero de incidente cliente: <valor>
+Severidad: <valor>
+Estado: <valor>
+Fecha del incidente: <valor>
+
+INFRAESTRUCTURA AFECTADA
+Equipo: <valor>
+Generado por: <valor>
+Motor: <valor>
+
+DETALLES TECNICOS DEL INCIDENTE
+Origen (IP interna): <valor>
+Destino (IP externa): <valor>
+Subcategoria: <valor>
+Objeto en cuestion: <valor>
+Tipo de comunicacion: <valor>
 
 RESUMEN TECNICO DEL INCIDENTE
 
-<un solo parrafo>
+<parrafo entre 140 y 420 caracteres que comience con el nombre del cliente>
 
-Reglas obligatorias:
-1. Devuelve solo esa seccion final, sin encabezados adicionales, sin listas, sin tablas y sin texto extra.
-2. El parrafo debe empezar siempre con el nombre del cliente. Si no se puede identificar, empieza con No especificado.
-3. Longitud minima 180 caracteres y maxima 500 caracteres.
-4. El parrafo debe sonar humano, natural y profesional, no robotico ni telegrafico.
-5. Debe ser lo bastante explicito para que un ingeniero junior entienda el incidente sin revisar el texto original y sin tener que suponer datos clave.
-6. Debe mencionar de forma clara y directa: que paso, sobre que activo o sistema ocurrio, cual fue la causa o evento detectado y cual es el impacto o riesgo operativo.
-7. Si alguno de esos elementos no aparece, no lo inventes; redacta el resumen con lo que si este soportado por el texto.
-8. Evita frases cortadas, listas de palabras o estructuras repetitivas de plantilla.
-9. Si el cliente aparece como ciudad, empresa, sitio, sucursal o entidad comercial, usalo como cliente.
-10. Ignora pies de pagina, enlaces, firmas y textos comerciales.
-11. Si el incidente menciona NOC, AP leave, desconexion, hardware, fallo fisico, enlace o disponibilidad, interpretalo como infraestructura. Si menciona malware, C2, exfiltracion, VPN sospechosa o actividad maliciosa, interpretalo como seguridad.
-12. Aunque solo respondas con el resumen, analiza a profundidad antes de redactarlo.
-
-Criterios de extraccion internos:
+## Criterios de extraccion
 - Cliente puede venir como nombre de empresa, ciudad, sitio, sucursal, tenant o referencia comercial.
-- Si aparece una fecha completa como 2026-04-30 14:45:02, usala para comprender el momento del evento.
-- Si el objeto contiene Physical AP leave o texto equivalente, interpretalo como desconexion fisica de punto de acceso o evento similar.
-- Si la afectacion dice Equipo desconectado del fortiGate, refleja interrupcion de servicio, perdida de conectividad o afectacion del acceso solo si el texto lo justifica.
+- Si aparece un codigo tipo INC-Y26-..., usalo como Codigo de incidente.
+- Si aparece Num. Inc. Cliente, Numero de incidente cliente o similar, usalo literalmente.
+- Si aparece Fecha y hora generado en un solo campo, separa fecha y hora cuando sea posible.
+- Si aparece solo fecha completa tipo 2026-04-30 14:45:02, usa Fecha deteccion 30/04/2026 y Hora deteccion 14:45:02.
+- En Origen del bloque inicial usa equipo, sistema o interfaz principal.
+- En Origen (IP interna) y Destino (IP externa) usa solo IPs. Si no existen, deja No especificado.
+- Si el objeto contiene Physical AP leave o texto equivalente, Tipo de comunicacion debe reflejar desconexion fisica de punto de acceso o equivalente tecnico.
+- Si la afectacion dice Equipo desconectado del fortiGate, el impacto debe reflejar interrupcion de servicio, perdida de conectividad o afectacion de acceso solo si el texto lo justifica.
+- Amenaza detectada no tiene que ser malware; puede ser evento tecnico, por ejemplo desconexion de AP por fallo fisico.
+- El RESUMEN TECNICO DEL INCIDENTE debe sonar profesional, directo y coherente con causa, impacto y contexto, iniciando obligatoriamente con el cliente.
+- El RESUMEN TECNICO DEL INCIDENTE debe explicar que paso, sobre que activo, por que es relevante y cual es el efecto operativo observado o potencial.
 
-Texto del usuario:
-' + $json.userText + '
+## Ejemplos de referencia
+Entrada tipo 1: Incidente de Infraestructura · Severidad Alta / Identificado / XOC / INC-Y26-1163295 / 2026-04-30 14:45:02 / Monterrey / resumen narrativo / FGT 60F / FIREWALL / Monitor: NOC / objeto / afectacion / acciones.
+Claves esperadas tipo 1: Tipo=Incidente de infraestructura, Cliente=Monterrey, Codigo=INC-Y26-1163295, Equipo=FGT-60F-MR-SUC02 o equipo equivalente en objeto, Generado por=XOC, Motor=NOC.
+Entrada tipo 2: Resumen narrativo + Datos del cliente + Informacion del incidente + Informacion adicional.
+Claves esperadas tipo 2: Cliente=Grupo Venado S.A., Codigo=INC-Y26-1163157, Equipo afectado=FGT40FTK2309B6TZ, Objeto en cuestion con Physical AP leave, Estado=Identificado.
 
-Respuesta:' }}`;
+## Texto del usuario
+\${$json.userText}
+
+## Respuesta:`;
 const REMOTE_PROVIDER_PRESETS: Record<RemoteLlmProvider, { baseUrl: string; generatePath: string }> = {
   OPENAI: {
     baseUrl: "https://api.openai.com",
@@ -157,79 +214,44 @@ export class LlmConfigService {
   }
 
   async generateIncidentSummary(userText: string) {
-    const config = await this.prisma.llmConfig.findUnique({
-      where: { configKey: DEFAULT_CONFIG_KEY }
-    });
-    const defaults = this.getDefaultConfig();
     const sourceText = this.normalizeIncidentSourceText(userText);
 
     if (!sourceText) {
       throw new BadRequestException("No hay contenido suficiente para generar el incidente.");
     }
 
+    const config = await this.prisma.llmConfig.findUnique({
+      where: { configKey: DEFAULT_CONFIG_KEY }
+    });
+    const defaults = this.getDefaultConfig();
     const prompt = this.buildIncidentPrompt(
       config?.referenceMarkdown ?? defaults.referenceMarkdown,
       sourceText
     );
-    const activeProvider = config?.activeProvider ?? defaults.activeProvider;
-
-    if (activeProvider === LlmProviderType.LOCAL) {
-      const model = config?.localModel ?? defaults.localModel;
-      const summary = await this.generateWithLocalProvider(
-        {
-          baseUrl: config?.localBaseUrl ?? defaults.localBaseUrl,
-          generatePath: config?.localGeneratePath ?? defaults.localGeneratePath,
-          model,
-          timeoutMs: config?.localTimeoutMs ?? defaults.localTimeoutMs
-        },
-        prompt
-      );
-
-      return {
-        summary,
-        provider: activeProvider,
-        providerName: "LOCAL",
-        model
-      };
-    }
-
-    const providerName = this.normalizeRemoteProvider(config?.apiProviderName);
-    if (!providerName) {
-      throw new BadRequestException("No hay un proveedor API remoto configurado.");
-    }
-
-    const apiKey = this.tryDecryptSecret(config?.apiKey ?? null);
-    if (!apiKey) {
-      throw new BadRequestException("No hay una API key remota configurada para generar el incidente.");
-    }
-
-    const model = config?.apiModel?.trim();
-    if (!model) {
-      throw new BadRequestException("No hay un modelo remoto configurado para generar el incidente.");
-    }
-
-    const apiPreset = REMOTE_PROVIDER_PRESETS[providerName];
-    const baseUrl = config?.apiBaseUrl ?? apiPreset.baseUrl;
-    const generatePath = config?.apiGeneratePath ?? apiPreset.generatePath;
-    const timeoutMs = config?.apiTimeoutMs ?? defaults.apiTimeoutMs;
-    const summary = await this.generateWithRemoteProvider(
-      providerName,
-      {
-        baseUrl,
-        generatePath,
-        model,
-        apiKey,
-        timeoutMs
-      },
-      prompt
-    );
+    const generated = await this.generateConfiguredText(prompt, config, defaults);
 
     return {
-      summary,
-      provider: activeProvider,
-      providerName,
-      model
+      summary: this.extractFinalIncidentSummary(generated.text),
+      provider: generated.provider,
+      providerName: generated.providerName,
+      model: generated.model
     };
+  }
+
+  async generateIncidentMetadata(userText: string): Promise<IncidentMetadata> {
+    const sourceText = this.normalizeIncidentSourceText(userText);
+    if (!sourceText) {
+      throw new BadRequestException("No hay contenido suficiente para clasificar el incidente.");
+    }
+
+    const config = await this.prisma.llmConfig.findUnique({
+      where: { configKey: DEFAULT_CONFIG_KEY }
+    });
+    const defaults = this.getDefaultConfig();
+    const prompt = this.buildIncidentMetadataPrompt(sourceText);
+    const generated = await this.generateConfiguredText(prompt, config, defaults);
+
+    return this.parseIncidentMetadata(generated.text);
   }
 
   getDefaultConfig() {
@@ -329,6 +351,73 @@ export class LlmConfigService {
     return REMOTE_LLM_PROVIDERS.includes(normalized as RemoteLlmProvider)
       ? (normalized as RemoteLlmProvider)
       : null;
+  }
+
+  private async generateConfiguredText(
+    prompt: string,
+    config: PersistedLlmConfig | null,
+    defaults: ReturnType<LlmConfigService["getDefaultConfig"]>
+  ) {
+    const activeProvider = config?.activeProvider ?? defaults.activeProvider;
+
+    if (activeProvider === LlmProviderType.LOCAL) {
+      const model = config?.localModel ?? defaults.localModel;
+      const timeoutMs = Math.max(config?.localTimeoutMs ?? defaults.localTimeoutMs, 120000);
+      const text = await this.generateWithLocalProvider(
+        {
+          baseUrl: config?.localBaseUrl ?? defaults.localBaseUrl,
+          generatePath: config?.localGeneratePath ?? defaults.localGeneratePath,
+          model,
+          timeoutMs
+        },
+        prompt
+      );
+
+      return {
+        text,
+        provider: activeProvider,
+        providerName: "LOCAL" as const,
+        model
+      };
+    }
+
+    const providerName = this.normalizeRemoteProvider(config?.apiProviderName);
+    if (!providerName) {
+      throw new BadRequestException("No hay un proveedor API remoto configurado.");
+    }
+
+    const apiKey = this.tryDecryptSecret(config?.apiKey ?? null);
+    if (!apiKey) {
+      throw new BadRequestException("No hay una API key remota configurada para generar el incidente.");
+    }
+
+    const model = config?.apiModel?.trim();
+    if (!model) {
+      throw new BadRequestException("No hay un modelo remoto configurado para generar el incidente.");
+    }
+
+    const apiPreset = REMOTE_PROVIDER_PRESETS[providerName];
+    const baseUrl = config?.apiBaseUrl ?? apiPreset.baseUrl;
+    const generatePath = config?.apiGeneratePath ?? apiPreset.generatePath;
+    const timeoutMs = Math.max(config?.apiTimeoutMs ?? defaults.apiTimeoutMs, 120000);
+    const text = await this.generateWithRemoteProvider(
+      providerName,
+      {
+        baseUrl,
+        generatePath,
+        model,
+        apiKey,
+        timeoutMs
+      },
+      prompt
+    );
+
+    return {
+      text,
+      provider: activeProvider,
+      providerName,
+      model
+    };
   }
 
   private async generateWithLocalProvider(
@@ -526,25 +615,184 @@ export class LlmConfigService {
 
   private buildIncidentPrompt(referenceMarkdown: string, userText: string) {
     const template = (referenceMarkdown || DEFAULT_LLM_REFERENCE_MARKDOWN).trim();
+    const placeholderPattern = /\$\{\s*\$json\.userText\s*\}|\$json\.userText/g;
 
-    if (!template.includes("$json.userText")) {
-      return `${template}\n\nTexto del usuario:\n${userText}\n\nRespuesta:`;
+    if (!placeholderPattern.test(template)) {
+      return `${this.unwrapTemplateDelimiters(template)}\n\nTexto del usuario:\n${userText}\n\nRespuesta:`;
     }
 
-    const [rawPrefix, ...restParts] = template.split("$json.userText");
-    const rawSuffix = restParts.join("$json.userText");
-    const prefix = rawPrefix.replace(/^\s*\{\{\s*'/, "").replace(/'\s*\+\s*$/, "");
-    const suffix = rawSuffix.replace(/^\s*\+\s*'/, "").replace(/'\s*\}\}\s*$/, "");
+    return this.unwrapTemplateDelimiters(template)
+      .replace(placeholderPattern, userText)
+      .replace(/\r\n?/g, "\n")
+      .trim();
+  }
 
-    return `${prefix}${userText}${suffix}`.replace(/\r\n?/g, "\n").trim();
+  private buildIncidentMetadataPrompt(userText: string) {
+    return [
+      "Analiza el siguiente correo de incidente y responde SOLO JSON valido.",
+      'Usa exactamente este esquema: {"category":"...","status":"...","severity":"..."}',
+      'category debe ser una de: "infraestructura", "seguridad", "aplicacion", "red", "desconocido"',
+      'status debe ser una de: "resuelto", "investigando", "identificado", "desconocido"',
+      'severity debe ser una de: "critica", "alta", "media", "baja", "desconocido"',
+      "No agregues texto fuera del JSON.",
+      "",
+      "Correo:",
+      userText
+    ].join("\n");
   }
 
   private normalizeIncidentSourceText(value: string) {
     return value.replace(/\r\n?/g, "\n").replace(/\u0000/g, "").trim();
   }
 
+  private unwrapTemplateDelimiters(value: string) {
+    let normalized = value.trim();
+
+    normalized = normalized.replace(/^\s*\{\{\s*/, "").replace(/\s*\}\}\s*$/, "");
+    normalized = normalized.replace(/^['"`]\s*/, "").replace(/\s*['"`]$/, "");
+
+    return normalized;
+  }
+
   private normalizeGeneratedText(value: string) {
     return value.replace(/\r\n?/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+  }
+
+  private extractFinalIncidentSummary(value: string) {
+    const normalized = this.normalizeGeneratedText(value);
+    const fullReportMarker = "RESUMEN DEL INCIDENTE";
+    const fullReportIndex = normalized.toUpperCase().lastIndexOf(fullReportMarker);
+    if (fullReportIndex >= 0) {
+      return normalized.slice(fullReportIndex).trim();
+    }
+
+    const marker = "RESUMEN TECNICO DEL INCIDENTE";
+    const markerIndex = normalized.toUpperCase().lastIndexOf(marker);
+
+    if (markerIndex >= 0) {
+      const summaryBlock = normalized.slice(markerIndex).trim();
+      const paragraph = summaryBlock
+        .replace(/^RESUMEN TECNICO DEL INCIDENTE\s*:?\s*/i, "")
+        .replace(/\r\n?/g, " ")
+        .replace(/\s{2,}/g, " ")
+        .trim();
+
+      return `RESUMEN TECNICO DEL INCIDENTE\n\n${paragraph}`;
+    }
+
+    const paragraph = normalized
+      .replace(/\r\n?/g, " ")
+      .replace(/\s{2,}/g, " ")
+      .trim();
+
+    return `RESUMEN TECNICO DEL INCIDENTE\n\n${paragraph}`;
+  }
+
+  private parseIncidentMetadata(value: string): IncidentMetadata {
+    const parsed = this.tryParseJsonObject(value);
+    const category = this.normalizeIncidentCategory(parsed?.category);
+    const status = this.normalizeIncidentStatus(parsed?.status);
+    const severity = this.normalizeIncidentSeverity(parsed?.severity);
+
+    return {
+      category,
+      status,
+      severity
+    };
+  }
+
+  private tryParseJsonObject(value: string) {
+    const sanitized = value.trim().replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/\s*```$/, "");
+
+    try {
+      return JSON.parse(sanitized) as {
+        category?: string;
+        status?: string;
+        severity?: string;
+      };
+    } catch {
+      const match = sanitized.match(/\{[\s\S]*\}/);
+      if (!match) {
+        return null;
+      }
+
+      try {
+        return JSON.parse(match[0]) as {
+          category?: string;
+          status?: string;
+          severity?: string;
+        };
+      } catch {
+        return null;
+      }
+    }
+  }
+
+  private normalizeIncidentCategory(value?: string | null) {
+    const normalized = value?.trim().toLowerCase();
+    if (!normalized) {
+      return null;
+    }
+
+    if (["infraestructura", "infra", "network", "red"].includes(normalized)) {
+      return normalized === "network" || normalized === "red" ? "Red" : "Infraestructura";
+    }
+
+    if (["seguridad", "security"].includes(normalized)) {
+      return "Seguridad";
+    }
+
+    if (["aplicacion", "aplicación", "application", "app"].includes(normalized)) {
+      return "Aplicacion";
+    }
+
+    return "Desconocido";
+  }
+
+  private normalizeIncidentStatus(value?: string | null) {
+    const normalized = value?.trim().toLowerCase();
+    if (!normalized) {
+      return null;
+    }
+
+    if (normalized.includes("resuelto")) {
+      return "Resuelto";
+    }
+
+    if (normalized.includes("investig")) {
+      return "Investigando";
+    }
+
+    if (normalized.includes("identific")) {
+      return "Identificado";
+    }
+
+    return "Desconocido";
+  }
+
+  private normalizeIncidentSeverity(value?: string | null) {
+    const normalized = value?.trim().toLowerCase();
+    if (!normalized) {
+      return null;
+    }
+
+    if (normalized.includes("crit")) {
+      return "Critica";
+    }
+
+    if (normalized.includes("alta") || normalized === "high") {
+      return "Alta";
+    }
+
+    if (normalized.includes("media") || normalized.includes("medi") || normalized === "medium") {
+      return "Media";
+    }
+
+    if (normalized.includes("baja") || normalized === "low") {
+      return "Baja";
+    }
+
+    return "Desconocido";
   }
 
   private async fetchOpenAiModels(apiKey: string) {
@@ -596,7 +844,6 @@ export class LlmConfigService {
     }>("GOOGLE", `https://generativelanguage.googleapis.com/v1beta/models?${params.toString()}`);
 
     return (data.models ?? [])
-      .filter((model) => model.supportedGenerationMethods?.includes("generateContent"))
       .map((model) => {
         const modelId = model.name?.replace(/^models\//, "").trim() ?? "";
         return {

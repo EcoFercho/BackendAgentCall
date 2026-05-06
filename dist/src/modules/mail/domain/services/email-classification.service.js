@@ -10,6 +10,7 @@ exports.EmailClassificationService = void 0;
 const common_1 = require("@nestjs/common");
 const client_1 = require("@prisma/client");
 const XOC_INCIDENT_SENDER_PATTERN = /^incidente_xoc\d+@grupogoit\.com$/i;
+const TEMP_ALLOWED_TEST_SENDERS = new Set(["engine.ia.lab@gmail.com"]);
 let EmailClassificationService = class EmailClassificationService {
     evaluate(input) {
         const sender = input.fromEmail.trim().toLowerCase();
@@ -22,12 +23,14 @@ let EmailClassificationService = class EmailClassificationService {
                 detectedClientName: null
             };
         }
-        if (XOC_INCIDENT_SENDER_PATTERN.test(sender)) {
+        if (XOC_INCIDENT_SENDER_PATTERN.test(sender) || TEMP_ALLOWED_TEST_SENDERS.has(sender)) {
             return {
                 status: client_1.MessageStatus.APPROVED,
-                classificationReason: "Correo aprobado por remitente operativo XOC reconocido",
+                classificationReason: TEMP_ALLOWED_TEST_SENDERS.has(sender)
+                    ? "Correo aprobado temporalmente para pruebas controladas"
+                    : "Correo aprobado por remitente operativo XOC reconocido",
                 classificationConfidence: 99,
-                matchedRules: ["xoc-incident-sender"],
+                matchedRules: [TEMP_ALLOWED_TEST_SENDERS.has(sender) ? "temporary-test-sender" : "xoc-incident-sender"],
                 detectedClientName: null
             };
         }
